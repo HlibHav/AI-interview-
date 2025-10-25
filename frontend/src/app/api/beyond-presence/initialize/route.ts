@@ -12,10 +12,10 @@ export async function POST(request: NextRequest) {
     }
 
     // Initialize Beyond Presence agent
-    const response = await fetch(`${process.env.BEYOND_PRESENCE_API_URL}/agents`, {
+    const response = await fetch(`${process.env.BEY_API_URL}/agents`, {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${process.env.BEYOND_PRESENCE_API_KEY}`,
+        "Authorization": `Bearer ${process.env.BEY_API_URL}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({

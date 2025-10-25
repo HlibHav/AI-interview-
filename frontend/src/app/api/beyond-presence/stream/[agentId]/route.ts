@@ -27,10 +27,10 @@ export async function GET(
         try {
           // Poll Beyond Presence for new responses
           const response = await fetch(
-            `${process.env.BEYOND_PRESENCE_API_URL}/agents/${agentId}/responses`,
+            `${process.env.BEY_API_KEY}/agents/${agentId}/responses`,
             {
               headers: {
-                "Authorization": `Bearer ${process.env.BEYOND_PRESENCE_API_KEY}`,
+                "Authorization": `Bearer ${process.env.BEY_API_KEY}`,
               },
             }
           );

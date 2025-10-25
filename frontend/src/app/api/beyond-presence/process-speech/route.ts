@@ -12,10 +12,10 @@ export async function POST(request: NextRequest) {
     }
 
     // Send transcript to Beyond Presence for processing
-    const response = await fetch(`${process.env.BEYOND_PRESENCE_API_URL}/agents/process`, {
+    const response = await fetch(`${process.env.BEY_API_KEY}/agents/process`, {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${process.env.BEYOND_PRESENCE_API_KEY}`,
+        "Authorization": `Bearer ${process.env.BEY_API_KEY}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({

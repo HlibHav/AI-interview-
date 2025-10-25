@@ -61,8 +61,8 @@ LIVEKIT_API_KEY=your-livekit-api-key
 LIVEKIT_API_SECRET=your-livekit-api-secret
 
 # Beyond Presence API Configuration
-BEYOND_PRESENCE_API_KEY=your-beyond-presence-api-key
-BEYOND_PRESENCE_API_URL=https://api.beyondpresence.com
+BEY_API_KEY=your-beyond-presence-api-key
+BEY_API_KEY=https://api.beyondpresence.com
 
 # Backend API Configuration
 BACKEND_API_URL=http://localhost:8000
