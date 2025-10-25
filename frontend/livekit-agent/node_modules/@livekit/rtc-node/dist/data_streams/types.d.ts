@@ -1,0 +1,10 @@
+import '../proto/room_pb.js';
+export { a as BaseStreamInfo, f as ByteStreamHandler, b as ByteStreamInfo, e as ByteStreamOptions, D as DataStreamOptions, S as StreamController, g as TextStreamHandler, c as TextStreamInfo, d as TextStreamOptions } from '../stream_reader-DRyR29vo.js';
+import '@bufbuild/protobuf';
+import '../proto/participant_pb.js';
+import '../proto/handle_pb.js';
+import '../proto/track_pb.js';
+import '../proto/stats_pb.js';
+import '../proto/e2ee_pb.js';
+import '../proto/video_frame_pb.js';
+import '../proto/data_stream_pb.js';

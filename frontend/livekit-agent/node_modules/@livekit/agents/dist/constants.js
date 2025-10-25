@@ -1,0 +1,15 @@
+const ATTRIBUTE_TRANSCRIPTION_TRACK_ID = "lk.transcribed_track_id";
+const ATTRIBUTE_TRANSCRIPTION_FINAL = "lk.transcription_final";
+const TOPIC_TRANSCRIPTION = "lk.transcription";
+const ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID = "lk.segment_id";
+const ATTRIBUTE_PUBLISH_ON_BEHALF = "lk.publish_on_behalf";
+const TOPIC_CHAT = "lk.chat";
+export {
+  ATTRIBUTE_PUBLISH_ON_BEHALF,
+  ATTRIBUTE_TRANSCRIPTION_FINAL,
+  ATTRIBUTE_TRANSCRIPTION_SEGMENT_ID,
+  ATTRIBUTE_TRANSCRIPTION_TRACK_ID,
+  TOPIC_CHAT,
+  TOPIC_TRANSCRIPTION
+};
+//# sourceMappingURL=constants.js.map

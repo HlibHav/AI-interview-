@@ -1,0 +1,342 @@
+"use strict";
+var __defProp = Object.defineProperty;
+var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
+var __getOwnPropNames = Object.getOwnPropertyNames;
+var __hasOwnProp = Object.prototype.hasOwnProperty;
+var __export = (target, all) => {
+  for (var name in all)
+    __defProp(target, name, { get: all[name], enumerable: true });
+};
+var __copyProps = (to, from, except, desc) => {
+  if (from && typeof from === "object" || typeof from === "function") {
+    for (let key of __getOwnPropNames(from))
+      if (!__hasOwnProp.call(to, key) && key !== except)
+        __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
+  }
+  return to;
+};
+var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
+var llm_exports = {};
+__export(llm_exports, {
+  LLM: () => LLM,
+  LLMStream: () => LLMStream
+});
+module.exports = __toCommonJS(llm_exports);
+var import_agents = require("@livekit/agents");
+var import_openai = require("openai");
+const defaultLLMOptions = {
+  model: "gpt-4.1",
+  apiKey: process.env.OPENAI_API_KEY,
+  parallelToolCalls: true
+};
+const defaultAzureLLMOptions = {
+  model: "gpt-4.1",
+  apiKey: process.env.AZURE_API_KEY
+};
+class LLM extends import_agents.llm.LLM {
+  #opts;
+  #client;
+  #providerFmt;
+  /**
+   * Create a new instance of OpenAI LLM.
+   *
+   * @remarks
+   * `apiKey` must be set to your OpenAI API key, either using the argument or by setting the
+   * `OPENAI_API_KEY` environment variable.
+   */
+  constructor(opts = defaultLLMOptions, providerFmt = "openai") {
+    super();
+    this.#opts = { ...defaultLLMOptions, ...opts };
+    this.#providerFmt = providerFmt;
+    if (this.#opts.apiKey === void 0) {
+      throw new Error("OpenAI API key is required, whether as an argument or as $OPENAI_API_KEY");
+    }
+    this.#client = this.#opts.client || new import_openai.OpenAI({
+      baseURL: opts.baseURL,
+      apiKey: opts.apiKey
+    });
+  }
+  label() {
+    return "openai.LLM";
+  }
+  get model() {
+    return this.#opts.model;
+  }
+  /**
+   * Create a new instance of OpenAI LLM with Azure.
+   *
+   * @remarks
+   * This automatically infers the following arguments from their corresponding environment variables if they are not provided:
+   * - `apiKey` from `AZURE_OPENAI_API_KEY`
+   * - `organization` from `OPENAI_ORG_ID`
+   * - `project` from `OPENAI_PROJECT_ID`
+   * - `azureAdToken` from `AZURE_OPENAI_AD_TOKEN`
+   * - `apiVersion` from `OPENAI_API_VERSION`
+   * - `azureEndpoint` from `AZURE_OPENAI_ENDPOINT`
+   */
+  static withAzure(opts = defaultAzureLLMOptions) {
+    opts = { ...defaultAzureLLMOptions, ...opts };
+    if (opts.apiKey === void 0) {
+      throw new Error("Azure API key is required, whether as an argument or as $AZURE_API_KEY");
+    }
+    return new LLM({
+      temperature: opts.temperature,
+      user: opts.user,
+      client: new import_openai.AzureOpenAI(opts)
+    });
+  }
+  /**
+   * Create a new instance of Cerebras LLM.
+   *
+   * @remarks
+   * `apiKey` must be set to your Cerebras API key, either using the argument or by setting the
+   * `CEREBRAS_API_KEY` environment variable.
+   */
+  static withCerebras(opts = {}) {
+    opts.apiKey = opts.apiKey || process.env.CEREBRAS_API_KEY;
+    if (opts.apiKey === void 0) {
+      throw new Error(
+        "Cerebras API key is required, whether as an argument or as $CEREBRAS_API_KEY"
+      );
+    }
+    return new LLM({
+      model: "llama3.1-8b",
+      baseURL: "https://api.cerebras.ai/v1",
+      ...opts
+    });
+  }
+  /**
+   * Create a new instance of Fireworks LLM.
+   *
+   * @remarks
+   * `apiKey` must be set to your Fireworks API key, either using the argument or by setting the
+   * `FIREWORKS_API_KEY` environment variable.
+   */
+  static withFireworks(opts = {}) {
+    opts.apiKey = opts.apiKey || process.env.FIREWORKS_API_KEY;
+    if (opts.apiKey === void 0) {
+      throw new Error(
+        "Fireworks API key is required, whether as an argument or as $FIREWORKS_API_KEY"
+      );
+    }
+    return new LLM({
+      model: "accounts/fireworks/models/llama-v3p1-70b-instruct",
+      baseURL: "https://api.fireworks.ai/inference/v1",
+      ...opts
+    });
+  }
+  /**
+   * Create a new instance of xAI LLM.
+   *
+   * @remarks
+   * `apiKey` must be set to your xAI API key, either using the argument or by setting the
+   * `XAI_API_KEY` environment variable.
+   */
+  static withXAI(opts = {}) {
+    opts.apiKey = opts.apiKey || process.env.XAI_API_KEY;
+    if (opts.apiKey === void 0) {
+      throw new Error("xAI API key is required, whether as an argument or as $XAI_API_KEY");
+    }
+    return new LLM({
+      model: "grok-2-public",
+      baseURL: "https://api.x.ai/v1",
+      ...opts
+    });
+  }
+  /**
+   * Create a new instance of Groq LLM.
+   *
+   * @remarks
+   * `apiKey` must be set to your Groq API key, either using the argument or by setting the
+   * `GROQ_API_KEY` environment variable.
+   */
+  static withGroq(opts = {}) {
+    opts.apiKey = opts.apiKey || process.env.GROQ_API_KEY;
+    if (opts.apiKey === void 0) {
+      throw new Error("Groq API key is required, whether as an argument or as $GROQ_API_KEY");
+    }
+    return new LLM({
+      model: "llama3-8b-8192",
+      baseURL: "https://api.groq.com/openai/v1",
+      ...opts
+    });
+  }
+  /**
+   * Create a new instance of DeepSeek LLM.
+   *
+   * @remarks
+   * `apiKey` must be set to your DeepSeek API key, either using the argument or by setting the
+   * `DEEPSEEK_API_KEY` environment variable.
+   */
+  static withDeepSeek(opts = {}) {
+    opts.apiKey = opts.apiKey || process.env.DEEPSEEK_API_KEY;
+    if (opts.apiKey === void 0) {
+      throw new Error(
+        "DeepSeek API key is required, whether as an argument or as $DEEPSEEK_API_KEY"
+      );
+    }
+    return new LLM({
+      model: "deepseek-chat",
+      baseURL: "https://api.deepseek.com/v1",
+      ...opts
+    });
+  }
+  /**
+   * Create a new instance of OctoAI LLM.
+   *
+   * @remarks
+   * `apiKey` must be set to your OctoAI API key, either using the argument or by setting the
+   * `OCTOAI_TOKEN` environment variable.
+   */
+  static withOcto(opts = {}) {
+    opts.apiKey = opts.apiKey || process.env.OCTOAI_TOKEN;
+    if (opts.apiKey === void 0) {
+      throw new Error("OctoAI API key is required, whether as an argument or as $OCTOAI_TOKEN");
+    }
+    return new LLM({
+      model: "llama-2-13b-chat",
+      baseURL: "https://text.octoai.run/v1",
+      ...opts
+    });
+  }
+  /** Create a new instance of Ollama LLM. */
+  static withOllama(opts = {}) {
+    return new LLM({
+      model: "llama-2-13b-chat",
+      baseURL: "https://text.octoai.run/v1",
+      apiKey: "ollama",
+      ...opts
+    });
+  }
+  /**
+   * Create a new instance of PerplexityAI LLM.
+   *
+   * @remarks
+   * `apiKey` must be set to your PerplexityAI API key, either using the argument or by setting the
+   * `PERPLEXITY_API_KEY` environment variable.
+   */
+  static withPerplexity(opts = {}) {
+    opts.apiKey = opts.apiKey || process.env.PERPLEXITY_API_KEY;
+    if (opts.apiKey === void 0) {
+      throw new Error(
+        "PerplexityAI API key is required, whether as an argument or as $PERPLEXITY_API_KEY"
+      );
+    }
+    return new LLM({
+      model: "llama-3.1-sonar-small-128k-chat",
+      baseURL: "https://api.perplexity.ai",
+      ...opts
+    });
+  }
+  /**
+   * Create a new instance of TogetherAI LLM.
+   *
+   * @remarks
+   * `apiKey` must be set to your TogetherAI API key, either using the argument or by setting the
+   * `TOGETHER_API_KEY` environment variable.
+   */
+  static withTogether(opts = {}) {
+    opts.apiKey = opts.apiKey || process.env.TOGETHER_API_KEY;
+    if (opts.apiKey === void 0) {
+      throw new Error(
+        "TogetherAI API key is required, whether as an argument or as $TOGETHER_API_KEY"
+      );
+    }
+    return new LLM({
+      model: "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo",
+      baseURL: "https://api.together.xyz/v1",
+      ...opts
+    });
+  }
+  /**
+   * Create a new instance of Telnyx LLM.
+   *
+   * @remarks
+   * `apiKey` must be set to your Telnyx API key, either using the argument or by setting the
+   * `TELNYX_API_KEY` environment variable.
+   */
+  static withTelnyx(opts = {}) {
+    opts.apiKey = opts.apiKey || process.env.TELNYX_API_KEY;
+    if (opts.apiKey === void 0) {
+      throw new Error("Telnyx API key is required, whether as an argument or as $TELNYX_API_KEY");
+    }
+    return new LLM({
+      model: "meta-llama/Meta-Llama-3.1-70B-Instruct",
+      baseURL: "https://api.telnyx.com/v2/ai",
+      ...opts
+    });
+  }
+  /**
+   * Create a new instance of Meta Llama LLM.
+   *
+   * @remarks
+   * `apiKey` must be set to your Meta Llama API key, either using the argument or by setting the
+   * `LLAMA_API_KEY` environment variable.
+   */
+  static withMeta(opts = {}) {
+    opts.apiKey = opts.apiKey || process.env.LLAMA_API_KEY;
+    opts.baseURL = opts.baseURL || "https://api.llama.com/compat/v1/";
+    opts.model = opts.model || "Llama-4-Maverick-17B-128E-Instruct-FP8";
+    if (opts.apiKey === void 0) {
+      throw new Error(
+        "Meta Llama API key is required, either as argument or set LLAMA_API_KEY environment variable"
+      );
+    }
+    return new LLM(opts);
+  }
+  chat({
+    chatCtx,
+    toolCtx,
+    connOptions = import_agents.DEFAULT_API_CONNECT_OPTIONS,
+    parallelToolCalls,
+    toolChoice,
+    extraKwargs
+  }) {
+    const extras = { ...extraKwargs };
+    if (this.#opts.metadata) {
+      extras.metadata = this.#opts.metadata;
+    }
+    if (this.#opts.user) {
+      extras.user = this.#opts.user;
+    }
+    if (this.#opts.maxCompletionTokens) {
+      extras.max_completion_tokens = this.#opts.maxCompletionTokens;
+    }
+    if (this.#opts.temperature) {
+      extras.temperature = this.#opts.temperature;
+    }
+    if (this.#opts.serviceTier) {
+      extras.service_tier = this.#opts.serviceTier;
+    }
+    if (this.#opts.store !== void 0) {
+      extras.store = this.#opts.store;
+    }
+    parallelToolCalls = parallelToolCalls !== void 0 ? parallelToolCalls : this.#opts.parallelToolCalls;
+    if (toolCtx && Object.keys(toolCtx).length > 0 && parallelToolCalls !== void 0) {
+      extras.parallel_tool_calls = parallelToolCalls;
+    }
+    toolChoice = toolChoice !== void 0 ? toolChoice : this.#opts.toolChoice;
+    if (toolChoice) {
+      extras.tool_choice = toolChoice;
+    }
+    return new LLMStream(this, {
+      model: this.#opts.model,
+      providerFmt: this.#providerFmt,
+      client: this.#client,
+      chatCtx,
+      toolCtx,
+      connOptions,
+      modelOptions: extras,
+      gatewayOptions: void 0
+      // OpenAI plugin doesn't use gateway authentication
+    });
+  }
+}
+class LLMStream extends import_agents.inference.LLMStream {
+}
+// Annotate the CommonJS export names for ESM import in node:
+0 && (module.exports = {
+  LLM,
+  LLMStream
+});
+//# sourceMappingURL=llm.cjs.map

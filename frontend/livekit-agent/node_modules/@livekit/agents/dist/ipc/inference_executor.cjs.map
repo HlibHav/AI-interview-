@@ -1,0 +1,1 @@
+{"version":3,"sources":["../../src/ipc/inference_executor.ts"],"sourcesContent":["// SPDX-FileCopyrightText: 2024 LiveKit, Inc.\n//\n// SPDX-License-Identifier: Apache-2.0\n\nexport interface InferenceExecutor {\n  doInference(method: string, data: unknown): Promise<unknown>;\n}\n"],"mappings":";;;;;;;;;;;;;;AAAA;AAAA;","names":[]}

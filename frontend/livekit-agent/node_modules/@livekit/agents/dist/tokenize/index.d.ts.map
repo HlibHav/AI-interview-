@@ -1,0 +1,1 @@
+{"version":3,"file":"index.d.ts","sourceRoot":"","sources":["../../src/tokenize/index.ts"],"names":[],"mappings":"AAGA,OAAO,KAAK,KAAK,MAAM,kBAAkB,CAAC;AAE1C,OAAO,EACL,KAAK,SAAS,EACd,iBAAiB,EACjB,cAAc,EACd,aAAa,EACb,UAAU,GACX,MAAM,gBAAgB,CAAC;AAExB,OAAO,EAAE,sBAAsB,EAAE,mBAAmB,EAAE,kBAAkB,EAAE,MAAM,mBAAmB,CAAC;AAEpG,OAAO,EAAE,KAAK,EAAE,CAAC"}

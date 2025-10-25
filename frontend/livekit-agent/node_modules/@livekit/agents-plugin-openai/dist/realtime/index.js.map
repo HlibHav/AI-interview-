@@ -1,0 +1,1 @@
+{"version":3,"sources":["../../src/realtime/index.ts"],"sourcesContent":["// SPDX-FileCopyrightText: 2024 LiveKit, Inc.\n//\n// SPDX-License-Identifier: Apache-2.0\nexport * from './api_proto.js';\nexport * from './realtime_model.js';\n"],"mappings":"AAGA,cAAc;AACd,cAAc;","names":[]}

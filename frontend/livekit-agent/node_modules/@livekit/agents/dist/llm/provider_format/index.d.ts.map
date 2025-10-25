@@ -1,0 +1,1 @@
+{"version":3,"file":"index.d.ts","sourceRoot":"","sources":["../../../src/llm/provider_format/index.ts"],"names":[],"mappings":"AAGA,OAAO,KAAK,EAAE,WAAW,EAAE,MAAM,oBAAoB,CAAC;AAItD,MAAM,MAAM,cAAc,GAAG,QAAQ,GAAG,QAAQ,CAAC;AAEjD,wBAAsB,SAAS,CAC7B,MAAM,EAAE,cAAc,EACtB,OAAO,EAAE,WAAW,EACpB,sBAAsB,GAAE,OAAc,oGAUvC"}

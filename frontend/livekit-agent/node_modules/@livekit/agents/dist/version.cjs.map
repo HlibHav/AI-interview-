@@ -1,0 +1,1 @@
+{"version":3,"sources":["../src/version.ts"],"sourcesContent":["// SPDX-FileCopyrightText: 2024 LiveKit, Inc.\n//\n// SPDX-License-Identifier: Apache-2.0\n\nexport const version = '0.1.0';\n"],"mappings":";;;;;;;;;;;;;;;;;;AAAA;AAAA;AAAA;AAAA;AAAA;AAIO,MAAM,UAAU;","names":[]}

@@ -1,0 +1,1 @@
+{"version":3,"file":"index.d.ts","sourceRoot":"","sources":["../../src/voice/index.ts"],"names":[],"mappings":"AAGA,OAAO,EAAE,KAAK,EAAE,YAAY,EAAE,KAAK,YAAY,EAAE,KAAK,aAAa,EAAE,MAAM,YAAY,CAAC;AACxF,OAAO,EAAE,YAAY,EAAE,KAAK,mBAAmB,EAAE,MAAM,oBAAoB,CAAC;AAE5E,cAAc,mBAAmB,CAAC;AAClC,cAAc,aAAa,CAAC;AAC5B,cAAc,oBAAoB,CAAC;AACnC,OAAO,EAAE,UAAU,EAAE,MAAM,kBAAkB,CAAC"}

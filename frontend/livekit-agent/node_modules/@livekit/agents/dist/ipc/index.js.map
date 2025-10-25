@@ -1,0 +1,1 @@
+{"version":3,"sources":["../../src/ipc/index.ts"],"sourcesContent":["// SPDX-FileCopyrightText: 2025 LiveKit, Inc.\n//\n// SPDX-License-Identifier: Apache-2.0\n\nexport * from './inference_executor.js';\n"],"mappings":"AAIA,cAAc;","names":[]}

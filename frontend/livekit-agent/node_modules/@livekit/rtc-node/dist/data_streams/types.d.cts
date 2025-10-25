@@ -1,0 +1,10 @@
+import '../proto/room_pb.cjs';
+export { a as BaseStreamInfo, f as ByteStreamHandler, b as ByteStreamInfo, e as ByteStreamOptions, D as DataStreamOptions, S as StreamController, g as TextStreamHandler, c as TextStreamInfo, d as TextStreamOptions } from '../stream_reader-Ch2zvjU3.cjs';
+import '@bufbuild/protobuf';
+import '../proto/participant_pb.cjs';
+import '../proto/handle_pb.cjs';
+import '../proto/track_pb.cjs';
+import '../proto/stats_pb.cjs';
+import '../proto/e2ee_pb.cjs';
+import '../proto/video_frame_pb.cjs';
+import '../proto/data_stream_pb.cjs';

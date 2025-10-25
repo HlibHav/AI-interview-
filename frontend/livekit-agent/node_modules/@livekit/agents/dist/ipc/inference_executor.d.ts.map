@@ -1,0 +1,1 @@
+{"version":3,"file":"inference_executor.d.ts","sourceRoot":"","sources":["../../src/ipc/inference_executor.ts"],"names":[],"mappings":"AAIA,MAAM,WAAW,iBAAiB;IAChC,WAAW,CAAC,MAAM,EAAE,MAAM,EAAE,IAAI,EAAE,OAAO,GAAG,OAAO,CAAC,OAAO,CAAC,CAAC;CAC9D"}

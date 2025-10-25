@@ -1,0 +1,94 @@
+/// <reference types="node" resolution-mode="require"/>
+import type { AudioFrame } from '@livekit/rtc-node';
+import { ReadableStream } from 'node:stream/web';
+import { type ChatContext, ChatMessage } from '../llm/chat_context.js';
+import { type GenerationCreatedEvent, type InputSpeechStartedEvent, type InputSpeechStoppedEvent, type InputTranscriptionCompleted, LLM, RealtimeModel, type RealtimeSession, type ToolChoice, type ToolContext } from '../llm/index.js';
+import { STT, type SpeechEvent } from '../stt/stt.js';
+import { TTS } from '../tts/tts.js';
+import { Future, Task } from '../utils.js';
+import { VAD, type VADEvent } from '../vad.js';
+import type { Agent } from './agent.js';
+import { type AgentSession, type TurnDetectionMode } from './agent_session.js';
+import { type EndOfTurnInfo, type RecognitionHooks } from './audio_recognition.js';
+import { SpeechHandle } from './speech_handle.js';
+export declare class AgentActivity implements RecognitionHooks {
+    private static readonly REPLY_TASK_CANCEL_TIMEOUT;
+    private started;
+    private audioRecognition?;
+    private realtimeSession?;
+    private turnDetectionMode?;
+    private logger;
+    private _draining;
+    private _currentSpeech?;
+    private speechQueue;
+    private q_updated;
+    private speechTasks;
+    private lock;
+    private audioStream;
+    private toolChoice;
+    agent: Agent;
+    agentSession: AgentSession;
+    /** @internal */
+    _mainTask?: Task<void>;
+    _userTurnCompletedTask?: Promise<void>;
+    constructor(agent: Agent, agentSession: AgentSession);
+    start(): Promise<void>;
+    get currentSpeech(): SpeechHandle | undefined;
+    get vad(): VAD | undefined;
+    get stt(): STT | undefined;
+    get llm(): LLM | RealtimeModel | undefined;
+    get tts(): TTS | undefined;
+    get tools(): ToolContext;
+    get draining(): boolean;
+    get realtimeLLMSession(): RealtimeSession | undefined;
+    get allowInterruptions(): boolean;
+    get turnDetection(): TurnDetectionMode | undefined;
+    get toolCtx(): ToolContext;
+    updateChatCtx(chatCtx: ChatContext): Promise<void>;
+    updateOptions({ toolChoice }: {
+        toolChoice?: ToolChoice | null;
+    }): void;
+    attachAudioInput(audioStream: ReadableStream<AudioFrame>): void;
+    detachAudioInput(): void;
+    commitUserTurn(): void;
+    clearUserTurn(): void;
+    say(text: string | ReadableStream<string>, options?: {
+        audio?: ReadableStream<AudioFrame>;
+        allowInterruptions?: boolean;
+        addToChatCtx?: boolean;
+    }): SpeechHandle;
+    private onMetricsCollected;
+    private onError;
+    onInputSpeechStarted(_ev: InputSpeechStartedEvent): void;
+    onInputSpeechStopped(ev: InputSpeechStoppedEvent): void;
+    onInputAudioTranscriptionCompleted(ev: InputTranscriptionCompleted): void;
+    onGenerationCreated(ev: GenerationCreatedEvent): void;
+    onStartOfSpeech(_ev: VADEvent): void;
+    onEndOfSpeech(_ev: VADEvent): void;
+    onVADInferenceDone(ev: VADEvent): void;
+    onInterimTranscript(ev: SpeechEvent): void;
+    onFinalTranscript(ev: SpeechEvent): void;
+    private createSpeechTask;
+    onEndOfTurn(info: EndOfTurnInfo): Promise<boolean>;
+    retrieveChatCtx(): ChatContext;
+    private mainTask;
+    private wakeupMainTask;
+    generateReply(options: {
+        userMessage?: ChatMessage;
+        chatCtx?: ChatContext;
+        instructions?: string;
+        toolChoice?: ToolChoice | null;
+        allowInterruptions?: boolean;
+    }): SpeechHandle;
+    interrupt(): Future<void>;
+    private onPipelineReplyDone;
+    private userTurnCompleted;
+    private ttsTask;
+    private pipelineReplyTask;
+    private realtimeGenerationTask;
+    private realtimeReplyTask;
+    private scheduleSpeech;
+    drain(): Promise<void>;
+    close(): Promise<void>;
+}
+//# sourceMappingURL=agent_activity.d.ts.map
