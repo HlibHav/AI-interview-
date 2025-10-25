@@ -102,13 +102,14 @@ The system is divided into three major layers:
 5. **Start the front end**
 
    ```bash
-   cd frontend
+   cd interview
    npm install
    npm run dev
    ```
 
-Visit `http://localhost:3000/admin` to create a research goal and generate a
-script.  Use the generated link to simulate a respondent session.
+Visit `http://localhost:3000` to access the admin dashboard and create a research goal. Use the generated link to simulate a respondent session.
+
+**Note:** The main application is located in the `interview/` directory.
 
 ## License
 
