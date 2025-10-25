@@ -1,47 +1,54 @@
 "use client";
 
-import { useState } from "react";
+import { startTransition, useEffect, useState } from "react";
 import { FileText, Edit3, Plus, Trash2, CheckCircle, RotateCcw } from "lucide-react";
+import type { InterviewScript } from "@/types/interview";
 
 interface Question {
   id: string;
   text: string;
   topic: string;
   followUps: string[];
+  intent?: string;
 }
 
 interface ScriptEditorProps {
+  script: InterviewScript | null;
   onScriptGenerated: () => void;
 }
 
-export default function ScriptEditor({ onScriptGenerated }: ScriptEditorProps) {
-  const [introduction, setIntroduction] = useState(
-    "Thank you for participating in this research interview. I'm an AI interviewer, and I'll be asking you some questions about your experiences. There are no right or wrong answers - I'm just interested in hearing your honest thoughts and experiences. The interview will take about 30 minutes, and everything you share will be kept confidential."
-  );
-  
-  const [questions, setQuestions] = useState<Question[]>([
-    {
-      id: "1",
-      text: "Can you tell me about your experience using mobile apps for shopping?",
-      topic: "General Experience",
-      followUps: ["What specific apps do you use?", "How often do you shop on mobile?"]
-    },
-    {
-      id: "2", 
-      text: "Walk me through the last time you made a purchase on a mobile app. What was that process like?",
-      topic: "Purchase Process",
-      followUps: ["What went well?", "What was frustrating?"]
-    },
-    {
-      id: "3",
-      text: "What factors influence your decision to complete a purchase versus abandoning your cart?",
-      topic: "Decision Making",
-      followUps: ["Can you give me a specific example?", "What would make you more likely to complete a purchase?"]
-    }
-  ]);
+const DEFAULT_INTRODUCTION =
+  "Thank you for participating in this research interview. I'm an AI interviewer, and I'll be asking you some questions about your experiences. There are no right or wrong answers - I'm just interested in hearing your honest thoughts and experiences. The interview will take about 30 minutes, and everything you share will be kept confidential.";
 
-  const [editingQuestion, setEditingQuestion] = useState<string | null>(null);
+const DEFAULT_CLOSING =
+  "Thanks so much for sharing your perspective today. Your input is extremely valuable and will help us shape future improvements. If you think of anything else after the session, feel free to share it with us.";
+
+export default function ScriptEditor({ script, onScriptGenerated }: ScriptEditorProps) {
+  const [introduction, setIntroduction] = useState(DEFAULT_INTRODUCTION);
+  const [closing, setClosing] = useState(DEFAULT_CLOSING);
+  const [questions, setQuestions] = useState<Question[]>([]);
+
   const [newQuestion, setNewQuestion] = useState({ text: "", topic: "" });
+
+  useEffect(() => {
+    if (!script) {
+      return;
+    }
+
+    startTransition(() => {
+      setIntroduction(script.introduction || DEFAULT_INTRODUCTION);
+      setClosing(script.closing || DEFAULT_CLOSING);
+      setQuestions(
+        script.questions.map((question, index) => ({
+          id: (index + 1).toString(),
+          text: question.question,
+          topic: question.intent || `Topic ${index + 1}`,
+          followUps: [],
+          intent: question.intent,
+        }))
+      );
+    });
+  }, [script]);
 
   const handleAddQuestion = () => {
     if (newQuestion.text.trim()) {
@@ -61,34 +68,9 @@ export default function ScriptEditor({ onScriptGenerated }: ScriptEditorProps) {
   };
 
   const handleRegenerateScript = () => {
-    // Simulate script regeneration
-    const newQuestions: Question[] = [
-      {
-        id: "1",
-        text: "Tell me about your typical mobile shopping habits.",
-        topic: "Shopping Habits",
-        followUps: ["How has this changed over time?", "What drives your mobile shopping?"]
-      },
-      {
-        id: "2",
-        text: "Describe a recent mobile shopping experience that went particularly well.",
-        topic: "Positive Experience",
-        followUps: ["What made it stand out?", "Would you shop there again?"]
-      },
-      {
-        id: "3",
-        text: "Can you think of a time when you almost made a purchase but decided not to? What happened?",
-        topic: "Abandonment",
-        followUps: ["What was the deciding factor?", "What could have changed your mind?"]
-      },
-      {
-        id: "4",
-        text: "What features or improvements would make mobile shopping more enjoyable for you?",
-        topic: "Improvements",
-        followUps: ["Can you prioritize these?", "Have you seen any apps that do this well?"]
-      }
-    ];
-    setQuestions(newQuestions);
+    setQuestions([]);
+    setIntroduction(DEFAULT_INTRODUCTION);
+    setClosing(DEFAULT_CLOSING);
   };
 
   const handleApproveScript = () => {
@@ -119,6 +101,20 @@ export default function ScriptEditor({ onScriptGenerated }: ScriptEditorProps) {
         />
       </div>
 
+      {/* Closing */}
+      <div className="bg-white border border-gray-200 rounded-lg p-6 mb-6">
+        <h3 className="text-lg font-semibold text-gray-900 mb-3 flex items-center">
+          <CheckCircle className="w-5 h-5 mr-2" />
+          Closing Statement
+        </h3>
+        <textarea
+          value={closing}
+          onChange={(e) => setClosing(e.target.value)}
+          className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
+          rows={3}
+        />
+      </div>
+
       {/* Questions */}
       <div className="bg-white border border-gray-200 rounded-lg p-6 mb-6">
         <div className="flex justify-between items-center mb-4">
@@ -133,42 +129,48 @@ export default function ScriptEditor({ onScriptGenerated }: ScriptEditorProps) {
         </div>
 
         <div className="space-y-4">
-          {questions.map((question, index) => (
-            <div key={question.id} className="border border-gray-200 rounded-lg p-4">
-              <div className="flex justify-between items-start mb-2">
-                <div className="flex items-center">
-                  <span className="bg-blue-100 text-blue-800 text-xs font-medium px-2 py-1 rounded mr-3">
-                    Q{index + 1}
-                  </span>
-                  <span className="bg-gray-100 text-gray-700 text-xs px-2 py-1 rounded">
-                    {question.topic}
-                  </span>
-                </div>
-                <button
-                  onClick={() => handleDeleteQuestion(question.id)}
-                  className="text-red-500 hover:text-red-700 transition-colors"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </button>
-              </div>
-              
-              <p className="text-gray-900 mb-3">{question.text}</p>
-              
-              {question.followUps.length > 0 && (
-                <div className="ml-4">
-                  <p className="text-sm text-gray-600 mb-2">Follow-up questions:</p>
-                  <ul className="text-sm text-gray-700 space-y-1">
-                    {question.followUps.map((followUp, idx) => (
-                      <li key={idx} className="flex items-start">
-                        <span className="text-gray-400 mr-2">•</span>
-                        {followUp}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
+          {questions.length === 0 ? (
+            <div className="border border-dashed border-gray-300 rounded-lg p-6 text-center text-sm text-gray-500">
+              Once the clarification chat confirms the scope, interview questions will appear here. You can also add your own questions below.
             </div>
-          ))}
+          ) : (
+            questions.map((question, index) => (
+              <div key={question.id} className="border border-gray-200 rounded-lg p-4">
+                <div className="flex justify-between items-start mb-2">
+                  <div className="flex items-center">
+                    <span className="bg-blue-100 text-blue-800 text-xs font-medium px-2 py-1 rounded mr-3">
+                      Q{index + 1}
+                    </span>
+                    <span className="bg-gray-100 text-gray-700 text-xs px-2 py-1 rounded">
+                      {question.topic || "General"}
+                    </span>
+                  </div>
+                  <button
+                    onClick={() => handleDeleteQuestion(question.id)}
+                    className="text-red-500 hover:text-red-700 transition-colors"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+
+                <p className="text-gray-900 mb-3">{question.text}</p>
+
+                {question.followUps.length > 0 && (
+                  <div className="ml-4">
+                    <p className="text-sm text-gray-600 mb-2">Follow-up questions:</p>
+                    <ul className="text-sm text-gray-700 space-y-1">
+                      {question.followUps.map((followUp, idx) => (
+                        <li key={idx} className="flex items-start">
+                          <span className="text-gray-400 mr-2">•</span>
+                          {followUp}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            ))
+          )}
         </div>
 
         {/* Add New Question */}
