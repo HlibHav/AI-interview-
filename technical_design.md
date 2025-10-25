@@ -2,8 +2,8 @@
 
 This document proposes a technical architecture and workflow for the hackathon
 project described in the briefing.  It assumes you will build the project with
-modern web tooling (React/Next.js on the front end, Python or Node.js on the
-back end) and make heavy use of large language models (LLMs), retrieval‑
+modern web tooling (React/Next.js, tailwind css,, Python or Node.js on the
+back end, clear file structure for front and backend on the front end) and make heavy use of large language models (LLMs), retrieval‑
 augmented generation (RAG) and vector databases such as **Weaviate**.
 
 ## 1. Goals and core features
@@ -112,8 +112,8 @@ Key functionality:
 | **Back end**         | **Python FastAPI** (or **Node.js/Express**) for REST and WebSocket endpoints.  Python provides rich LLM libraries and easier integration with LangChain, LlamaIndex and Weaviate clients. |
 | **Avatar & streaming** | **Beyond Presence Managed Agents** for low‑latency speech‑to‑video streaming and hyper‑realistic avatars【413673914178042†L23-L39】.  The SDK handles speech‑to‑text, text‑to‑speech and lip‑synced video rendering.  Optionally integrate fallback STT/TTS services (e.g., OpenAI Whisper and ElevenLabs) for voice‑only mode. |
 | **Vector DB**        | **Weaviate** (open source) for storing embeddings.  Use `text-embedding-ada-002` or a local **Sentence‑Transformers** model to generate embeddings.  Configure classes such as `InterviewChunk`, `ResearchGoal` and `QuestionPlan` with appropriate properties. |
-| **Agent framework**  | **LangChain** or **CrewAI** for multi‑agent orchestration.  They provide tools for building memory buffers, conversation history and RAG chains. |
-| **LLM**              | **OpenAI GPT‑4**, **Claude 2**, or open models like **Llama 3** or **Mixtral** via API.  During the hackathon, GPT‑4’s strong reasoning makes it a safe choice.  Use function calling/JSON modes for structured outputs. |
+| **Agent framework**  | **LangChain** for multi‑agent orchestration.  They provide tools for building memory buffers, conversation history and RAG chains. |
+| **LLM**              | **OpenAI GPT‑4**, via API.  During the hackathon, GPT‑4’s strong reasoning makes it a safe choice.  Use function calling/JSON modes for structured outputs. |
 | **Psychometric analysis** | Use an LLM to rate statements along the Big‑Five axes.  Optionally combine with rules‑based heuristics (e.g., counting adjectives indicating openness, conscientiousness etc.).  For Enneagram, use fine‑tuned models or heuristics. |
 | **Visualization**    | Use **Chart.js** or **D3.js** on the front end to render radar charts of personality traits.  Generate the underlying data in the back end. |
 | **Deployment**       | Dockerise services.  For quick demo, host on Vercel/Netlify (front end) and Fly.io/Render (back end).  Host Weaviate via the provided Docker image or use Weaviate Cloud. |
@@ -141,12 +141,12 @@ Weaviate.
 * **Inputs:** research goal and clarifications.
 * **Responsibilities:** produce a structured interview script: a warm
   introduction (agent introduces itself and explains recording & privacy), one
-  opening question, ~5–8 open questions covering the study topics, and
+  opening question, ~6–12 open questions covering the study topics, and
   suggested follow‑ups.  Ensure the questions are non‑leading and allow the
   respondent to narrate experiences.  Limit yes/no questions.
 * **Heuristics for number of questions:**
-  * `minQuestions = max(4, numberOfTopics × 2)`
-  * `maxQuestions = 10`
+  * `minQuestions = max(6, numberOfTopics × 2)`
+  * `maxQuestions = 12`
   * adjust if the admin specifies depth or time limit.  For a 5‑minute interview,
     plan about 6 main questions plus clarifiers.
 * **Prompt outline:**

@@ -17,7 +17,7 @@ The system comprises three main layers:
 2. **Agent orchestration back end:** A server (Python/FastAPI or Node)
    running a multi‑agent orchestrator.  It receives input from the UI,
    invokes large language models via an agent framework (e.g., LangChain
-   with LangGraph or CrewAI), retrieves context from a vector store,
+   with LangGraph), retrieves context from a vector store,
    generates responses and forwards them to Beyond Presence for
    rendering.
 3. **Data & observability layer:** A vector database (**Weaviate**) that

@@ -109,7 +109,7 @@ The end‑to‑end flow proceeds as follows:
    traced in Phoenix.
 3. **Plan generation:** the planner agent produces a structured script.
    Admins can revise the script; modifications are versioned in Weaviate.
-4. **Link distribution:** once approved, the system issues a link to the
+4. **Link distribution:** once approved, the system issues a link which can be sent to 
    respondent and awaits their connection.
 5. **Interview session:** the respondent joins and streams audio via
    Beyond Presence.  The managed agent performs speech‑to‑text and returns
