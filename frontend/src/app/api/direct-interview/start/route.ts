@@ -41,6 +41,32 @@ export async function POST(request: NextRequest) {
 
     const participantJwt = await participantToken.toJwt();
 
+    // Initialize Beyond Presence agent
+    try {
+      const beyResponse = await fetch(`${request.nextUrl.origin}/api/beyond-presence/initialize`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          sessionId,
+          participantEmail,
+          researchGoal,
+        }),
+      });
+
+      if (!beyResponse.ok) {
+        console.error("Beyond Presence initialization failed:", await beyResponse.text());
+        // Continue without Beyond Presence if it fails
+      } else {
+        const beyData = await beyResponse.json();
+        console.log("Beyond Presence agent initialized:", beyData.agentId);
+      }
+    } catch (error) {
+      console.error("Error initializing Beyond Presence:", error);
+      // Continue without Beyond Presence if it fails
+    }
+
     // Store session metadata in Weaviate
     await storeSessionMetadata(sessionId, participantEmail, researchGoal);
 
@@ -48,7 +74,8 @@ export async function POST(request: NextRequest) {
       sessionId,
       participantToken: participantJwt,
       roomName: sessionId,
-      researchGoal: researchGoal || "General user research and product validation"
+      researchGoal: researchGoal || "General user research and product validation",
+      beyIntegration: true
     });
 
   } catch (error) {

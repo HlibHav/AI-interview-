@@ -7,7 +7,7 @@ export async function GET(
   const { agentId } = await params;
 
   if (!agentId) {
-    return new Response("Agent ID is required", { status: 400 });
+    return new Response("Session ID is required", { status: 400 });
   }
 
   // Create a readable stream for Server-Sent Events
@@ -22,15 +22,14 @@ export async function GET(
         "Access-Control-Allow-Headers": "Cache-Control",
       });
 
-      // Simulate streaming responses from Beyond Presence
+      // Poll Beyond Presence for new responses
       const interval = setInterval(async () => {
         try {
-          // Poll Beyond Presence for new responses
           const response = await fetch(
-            `${process.env.BEY_API_KEY}/agents/${agentId}/responses`,
+            `${process.env.BEY_API_URL || 'https://api.bey.dev'}/v1/sessions/${agentId}/messages`,
             {
               headers: {
-                "Authorization": `Bearer ${process.env.BEY_API_KEY}`,
+                "x-api-key": process.env.BEY_API_KEY!,
               },
             }
           );
@@ -38,28 +37,41 @@ export async function GET(
           if (response.ok) {
             const data = await response.json();
             
-            if (data.hasNewResponse) {
-              // Send audio response
-              if (data.audioUrl) {
+            if (data.messages && data.messages.length > 0) {
+              // Send the latest message
+              const latestMessage = data.messages[data.messages.length - 1];
+              
+              if (latestMessage.type === "audio" && latestMessage.audio_url) {
                 controller.enqueue(
                   new TextEncoder().encode(
                     `data: ${JSON.stringify({
                       type: "audio",
-                      audioUrl: data.audioUrl,
-                      timestamp: new Date().toISOString(),
+                      audioUrl: latestMessage.audio_url,
+                      timestamp: latestMessage.timestamp || new Date().toISOString(),
                     })}\n\n`
                   )
                 );
               }
 
-              // Send text response
-              if (data.text) {
+              if (latestMessage.type === "text" && latestMessage.text) {
                 controller.enqueue(
                   new TextEncoder().encode(
                     `data: ${JSON.stringify({
                       type: "text",
-                      text: data.text,
-                      timestamp: new Date().toISOString(),
+                      text: latestMessage.text,
+                      timestamp: latestMessage.timestamp || new Date().toISOString(),
+                    })}\n\n`
+                  )
+                );
+              }
+
+              if (latestMessage.type === "video" && latestMessage.video_url) {
+                controller.enqueue(
+                  new TextEncoder().encode(
+                    `data: ${JSON.stringify({
+                      type: "video",
+                      videoUrl: latestMessage.video_url,
+                      timestamp: latestMessage.timestamp || new Date().toISOString(),
                     })}\n\n`
                   )
                 );
@@ -77,7 +89,7 @@ export async function GET(
             )
           );
         }
-      }, 1000); // Poll every second
+      }, 2000); // Poll every 2 seconds
 
       // Clean up on close
       request.signal.addEventListener("abort", () => {

@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { Mic, MicOff, Video, VideoOff, Phone, PhoneOff, Bot, User, AlertCircle } from "lucide-react";
-import AIInterviewRoom from "@/components/AIInterviewRoom";
+import BeyondPresenceInterviewRoom from "@/components/BeyondPresenceInterviewRoom";
 import CameraPermissionPrompt from "@/components/CameraPermissionPrompt";
 
 export default function DirectAIInterview() {
@@ -161,7 +161,7 @@ export default function DirectAIInterview() {
   return (
     <div className="min-h-screen bg-gray-900">
       {isConnected ? (
-        <AIInterviewRoom
+        <BeyondPresenceInterviewRoom
           sessionId={sessionId}
           participantEmail={participantEmail}
           researchGoal={researchGoal}
