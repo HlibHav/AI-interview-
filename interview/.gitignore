@@ -30,8 +30,29 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
+# Environment files and secrets
 .env*
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+*.env
+config.json
+secrets.json
+credentials.json
+
+# API Keys and sensitive files
+*.key
+*.pem
+*.p12
+*.pfx
+*.crt
+*.cer
+*.der
+id_rsa*
+id_dsa*
+id_ecdsa*
+id_ed25519*
 
 # vercel
 .vercel
@@ -39,4 +60,3 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
-.env.local
