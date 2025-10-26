@@ -2,13 +2,16 @@ import { NextRequest, NextResponse } from 'next/server';
 import weaviate from 'weaviate-ts-client';
 
 // Initialize Weaviate client
-let client;
+let client: any;
 try {
+  const host = 'localhost:8081';
+  console.log('Initializing Weaviate client with host:', host);
   client = weaviate.client({
     scheme: 'http',
-    host: process.env.WEAVIATE_HOST || 'localhost:8080',
-    apiKey: process.env.WEAVIATE_API_KEY,
+    host: host,
+    apiKey: process.env.WEAVIATE_API_KEY as any,
   });
+  console.log('Weaviate client initialized successfully');
 } catch (error) {
   console.error('Failed to initialize Weaviate client:', error);
 }
@@ -72,6 +75,18 @@ export async function POST(request: NextRequest) {
     const { action, data, className } = await request.json();
 
     switch (action) {
+      case 'test_connection':
+        if (!client) {
+          return NextResponse.json({ error: 'Weaviate client not initialized' }, { status: 500 });
+        }
+        const host = 'localhost:8081';
+        return NextResponse.json({ 
+          success: true, 
+          message: 'Client initialized', 
+          host: host,
+          clientExists: !!client 
+        });
+
       case 'create_schema':
         await createSchema();
         return NextResponse.json({ success: true, message: 'Schema created successfully' });
@@ -108,7 +123,7 @@ async function createSchema() {
     
     // Check if schema already exists
     const existingSchema = await client.schema.getter().do();
-    const existingClasses = existingSchema.classes?.map(c => c.class) || [];
+    const existingClasses = existingSchema.classes?.map((c: any) => c.class) || [];
 
     for (const schemaClass of schemaClasses) {
       if (!existingClasses.includes(schemaClass.class)) {

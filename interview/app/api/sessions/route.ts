@@ -1,23 +1,38 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { v4 as uuidv4 } from 'uuid';
 
-// In-memory session storage with persistence
-const sessions = new Map<string, any>();
-
-// Load sessions from localStorage on server start (simplified persistence)
-if (typeof window === 'undefined') {
-  // Server-side: Initialize with empty sessions
-  // In production, this would connect to a database
-  console.log('Session storage initialized (in-memory)');
+// Global session storage declaration
+declare global {
+  var sessionsStore: Map<string, any> | undefined;
 }
 
+// In-memory session storage - singleton to persist across API route reloads
+let sessions: Map<string, any>;
+
+if (typeof global.sessionsStore === 'undefined') {
+  global.sessionsStore = new Map<string, any>();
+  console.log('Session storage initialized (in-memory singleton)');
+}
+sessions = global.sessionsStore;
+
 export async function POST(request: NextRequest) {
+  console.log('🔵 [SESSIONS API] POST request received');
+  console.log('🔵 [SESSIONS API] Request URL:', request.url);
+  
   try {
-    const { script, researchGoal, adminEmail, targetAudience, duration, sensitivity } = await request.json();
+    const body = await request.json();
+    console.log('🔵 [SESSIONS API] Request body keys:', Object.keys(body));
+    console.log('🔵 [SESSIONS API] Request body:', JSON.stringify(body, null, 2));
+    
+    const { script, researchGoal, adminEmail, targetAudience, duration, sensitivity } = body;
 
     const sessionId = uuidv4();
     const roomName = `interview-${sessionId}`;
     const sessionUrl = `${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'}/respondent?session=${sessionId}`;
+
+    console.log('🔵 [SESSIONS API] Creating session:', sessionId);
+    console.log('🔵 [SESSIONS API] Room name:', roomName);
+    console.log('🔵 [SESSIONS API] Session URL:', sessionUrl);
 
     // Create session data
     const session = {
@@ -42,11 +57,14 @@ export async function POST(request: NextRequest) {
       evaluationMetrics: null,
       beyondPresenceAgentId: null,
       beyondPresenceSessionId: null,
-      livekitConnected: false,
     };
 
     // Store session in memory
     sessions.set(sessionId, session);
+    
+    console.log('✅ [SESSIONS API] Session created and stored:', sessionId);
+    console.log('✅ [SESSIONS API] Total sessions now:', sessions.size);
+    console.log('✅ [SESSIONS API] All session IDs:', Array.from(sessions.keys()));
 
     return NextResponse.json({
       success: true,
@@ -57,7 +75,7 @@ export async function POST(request: NextRequest) {
     });
 
   } catch (error) {
-    console.error('Session creation error:', error);
+    console.error('❌ [SESSIONS API] Session creation error:', error);
     return NextResponse.json(
       { error: 'Failed to create session' },
       { status: 500 }
@@ -66,27 +84,41 @@ export async function POST(request: NextRequest) {
 }
 
 export async function GET(request: NextRequest) {
+  console.log('🔍 [SESSIONS API] GET request received');
+  console.log('🔍 [SESSIONS API] Request URL:', request.url);
+  console.log('🔍 [SESSIONS API] Total sessions in memory:', sessions.size);
+  console.log('🔍 [SESSIONS API] Session IDs:', Array.from(sessions.keys()));
+  
   try {
     const { searchParams } = new URL(request.url);
     const sessionId = searchParams.get('sessionId');
 
+    console.log('🔍 [SESSIONS API] Query params - sessionId:', sessionId);
+
     if (sessionId) {
       const session = sessions.get(sessionId);
+      console.log('🔍 [SESSIONS API] Looking up session:', sessionId);
+      console.log('🔍 [SESSIONS API] Session found:', !!session);
+      
       if (!session) {
+        console.error('❌ [SESSIONS API] Session not found:', sessionId);
+        console.error('❌ [SESSIONS API] Available sessions:', Array.from(sessions.keys()));
         return NextResponse.json(
           { error: 'Session not found' },
           { status: 404 }
         );
       }
+      console.log('✅ [SESSIONS API] Returning session:', sessionId);
       return NextResponse.json({ session });
     }
 
     // Return all sessions for admin dashboard
     const allSessions = Array.from(sessions.values());
+    console.log('🔍 [SESSIONS API] Returning all sessions:', allSessions.length);
     return NextResponse.json({ sessions: allSessions });
 
   } catch (error) {
-    console.error('Session retrieval error:', error);
+    console.error('❌ [SESSIONS API] Session retrieval error:', error);
     return NextResponse.json(
       { error: 'Failed to retrieve sessions' },
       { status: 500 }

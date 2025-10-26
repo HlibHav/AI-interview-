@@ -19,7 +19,18 @@ async function storeInWeaviate(className: string, data: any) {
 
 export async function POST(request: NextRequest) {
   try {
+    // Check if OpenAI API key is configured
+    if (!process.env.OPENAI_API_KEY) {
+      console.error('❌ OPENAI_API_KEY is not configured');
+      return NextResponse.json(
+        { error: 'OpenAI API key not configured. Please set OPENAI_API_KEY in your environment variables.' },
+        { status: 500 }
+      );
+    }
+
     const { researchGoal, clarifications } = await request.json();
+    
+    console.log('🔍 Clarification request:', { researchGoal, clarificationsCount: clarifications?.length || 0 });
     
     // If we already have 1 clarification, automatically complete
     if (clarifications && clarifications.length >= 1) {
@@ -66,6 +77,7 @@ Based on this information:
 - If you have received answers to all 3 questions (3 clarifications), respond with "CLARIFICATION_COMPLETE" and provide a structured brief.
 - If you have received some but not all answers, ask the remaining questions to reach exactly 3 total questions.`;
 
+    console.log('🤖 Making OpenAI API call for clarification...');
     const completion = await openai.chat.completions.create({
       model: "gpt-4",
       messages: [
@@ -74,6 +86,8 @@ Based on this information:
       ],
       temperature: 0.7,
     });
+    
+    console.log('✅ OpenAI API call successful');
 
     const response = completion.choices[0].message.content;
 
@@ -119,9 +133,24 @@ Based on this information:
     });
 
   } catch (error) {
-    console.error('Clarification agent error:', error);
+    console.error('❌ Clarification agent error:', error);
+    
+    // Provide more specific error messages
+    let errorMessage = 'Failed to process clarification request';
+    if (error instanceof Error) {
+      if (error.message.includes('API key')) {
+        errorMessage = 'OpenAI API key is invalid or missing. Please check your OPENAI_API_KEY environment variable.';
+      } else if (error.message.includes('rate limit')) {
+        errorMessage = 'OpenAI API rate limit exceeded. Please try again in a few minutes.';
+      } else if (error.message.includes('quota')) {
+        errorMessage = 'OpenAI API quota exceeded. Please check your OpenAI account billing.';
+      } else {
+        errorMessage = `Clarification error: ${error.message}`;
+      }
+    }
+    
     return NextResponse.json(
-      { error: 'Failed to process clarification request' },
+      { error: errorMessage },
       { status: 500 }
     );
   }

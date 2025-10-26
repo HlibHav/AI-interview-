@@ -1,9 +1,44 @@
 import { NextRequest, NextResponse } from "next/server";
 import { AccessToken } from "livekit-server-sdk";
+import BeyondPresence from "@bey-dev/sdk";
+
+// In-memory session tracking for idempotency
+const activeSessions = new Map<string, { sessionId: string; roomName: string; createdAt: number; status: string }>();
 
 export async function POST(request: NextRequest) {
   try {
-    const { participantEmail, agentId, roomName } = await request.json();
+    const { participantEmail, interviewId } = await request.json();
+
+    console.log("🔍 Create-session request received:", {
+      participantEmail,
+      interviewId,
+      hasInterviewId: !!interviewId
+    });
+
+    // Use interviewId for idempotency if provided
+    const idempotencyKey = interviewId;
+
+    // Check if session already exists and is less than 30 minutes old
+    if (idempotencyKey && activeSessions.has(idempotencyKey)) {
+      const existing = activeSessions.get(idempotencyKey)!;
+      const ageMinutes = (Date.now() - existing.createdAt) / (1000 * 60);
+
+      if (ageMinutes < 30) {
+        console.log(`🔄 Returning existing BP session for ${idempotencyKey}:`, existing.sessionId);
+        return NextResponse.json({
+          sessionId: existing.sessionId,
+          avatarId: process.env.BEY_AVATAR_ID,
+          livekitUrl: process.env.NEXT_PUBLIC_LIVEKIT_URL,
+          startedAt: new Date(existing.createdAt).toISOString(),
+          transportType: "livekit",
+          roomName: existing.roomName,
+          status: existing.status
+        });
+      } else {
+        // Remove expired session
+        activeSessions.delete(idempotencyKey);
+      }
+    }
 
     // Validate required environment variables
     if (!process.env.LIVEKIT_API_KEY || !process.env.LIVEKIT_API_SECRET) {
@@ -16,149 +51,137 @@ export async function POST(request: NextRequest) {
       throw new Error("NEXT_PUBLIC_LIVEKIT_URL must be set");
     }
 
-    if (!roomName) {
+    // Verify credentials are not empty
+    if (!process.env.BEY_API_KEY.trim() || !process.env.BEY_AVATAR_ID.trim()) {
+      console.error("❌ Credentials are empty or whitespace");
       return NextResponse.json(
-        { error: "roomName is required" },
+        { error: "Invalid credentials: API key or Avatar ID is empty" },
         { status: 400 }
       );
     }
 
-    if (!agentId) {
-      return NextResponse.json(
-        { error: "agentId is required" },
-        { status: 400 }
-      );
-    }
-
-    // Generate a LiveKit token for the Beyond Presence agent using the same room as participant
-    const livekitToken = new AccessToken(
-      process.env.LIVEKIT_API_KEY!,
-      process.env.LIVEKIT_API_SECRET!,
-      {
-        identity: `bey-agent-${Date.now()}`,
-        name: "Beyond Presence Agent",
-      }
-    );
-
-    // Grant permissions for the agent to join the same room as participant
-    livekitToken.addGrant({
-      room: roomName,
-      roomJoin: true,
-      canPublish: true,
-      canSubscribe: true,
-      canPublishData: true,
-      canUpdateOwnMetadata: true,
+    // Initialize Beyond Presence SDK
+    const bey = new BeyondPresence({
+      apiKey: process.env.BEY_API_KEY!,
     });
 
-    const livekitJwt = await livekitToken.toJwt();
-
-    // Create speech-to-video session using Beyond Presence API
-    const requestBody = {
+    console.log("📝 Creating new Beyond Presence session with:", {
       avatar_id: process.env.BEY_AVATAR_ID!,
       livekit_url: process.env.NEXT_PUBLIC_LIVEKIT_URL,
-      livekit_token: livekitJwt,
-      transport_type: "livekit",
-      agent_id: agentId, // Link to the initialized agent
-    };
-
-    const response = await fetch(`${process.env.BEY_API_URL || 'https://api.bey.dev'}/v1/sessions`, {
-      method: "POST",
-      headers: {
-        "x-api-key": process.env.BEY_API_KEY!,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(requestBody),
+      interviewId
     });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error("Beyond Presence session creation error:", {
-        status: response.status,
-        statusText: response.statusText,
-        errorText,
-        roomName,
-        agentId,
-        apiUrl: `${process.env.BEY_API_URL || 'https://api.bey.dev'}/v1/sessions`
-      });
-      throw new Error(`Failed to create Beyond Presence session: ${response.status} - ${errorText}`);
-    }
-
-    const sessionData = await response.json();
-    console.log("Beyond Presence session created successfully:", {
-      sessionId: sessionData.id,
-      roomName,
-      agentId,
-      sessionData
-    });
-
-    // Start the session
-    try {
-      const startResponse = await fetch(`${process.env.BEY_API_URL || 'https://api.bey.dev'}/v1/sessions/${sessionData.id}/start`, {
-        method: "POST",
-        headers: {
-          "x-api-key": process.env.BEY_API_KEY!,
-          "Content-Type": "application/json",
-        },
-      });
-
-      if (startResponse.ok) {
-        const startData = await startResponse.json();
-        console.log("Beyond Presence session started:", startData);
-        
-        // Wait a moment for the session to initialize
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        
-        // Send an initial message to trigger the avatar
-        try {
-          const initialMessageResponse = await fetch(`${process.env.BEY_API_URL || 'https://api.bey.dev'}/v1/sessions/${sessionData.id}/messages`, {
-            method: "POST",
-            headers: {
-              "x-api-key": process.env.BEY_API_KEY!,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              type: "user_message",
-              text: "Hello, I'm ready to start the interview.",
-              timestamp: new Date().toISOString(),
-            }),
-          });
-          
-          if (initialMessageResponse.ok) {
-            console.log("Initial message sent to Beyond Presence session");
-          } else {
-            const errorText = await initialMessageResponse.text();
-            console.error("Failed to send initial message:", {
-              status: initialMessageResponse.status,
-              errorText
-            });
-          }
-        } catch (error) {
-          console.error("Error sending initial message:", error);
-        }
-      } else {
-        const errorText = await startResponse.text();
-        console.error("Failed to start Beyond Presence session:", {
-          status: startResponse.status,
-          errorText
+      // Create speech-to-video session using Beyond Presence SDK
+      let session;
+      try {
+        console.log("🔍 Creating BP session (BP will auto-create agent):", {
+          avatar_id: process.env.BEY_AVATAR_ID!,
+          livekit_url: process.env.NEXT_PUBLIC_LIVEKIT_URL,
+          interviewId: interviewId
         });
-      }
-    } catch (error) {
-      console.error("Error starting Beyond Presence session:", error);
-    }
 
-    return NextResponse.json({
-      sessionId: sessionData.id,
-      avatarId: sessionData.avatar_id,
-      livekitUrl: sessionData.livekit_url,
-      startedAt: sessionData.started_at,
-      transportType: sessionData.transport_type,
-      status: "created"
-    });
+        // Generate LiveKit token for the interview room (BP will use this as the room)
+        const livekitToken = new AccessToken(
+          process.env.LIVEKIT_API_KEY!,
+          process.env.LIVEKIT_API_SECRET!,
+          {
+            identity: `bey-agent-${interviewId}`,
+            name: `Beyond Presence Agent`,
+          }
+        );
+
+        // Grant permissions for the interview room
+        livekitToken.addGrant({
+          roomJoin: true,
+          room: interviewId, // Use interviewId as room name
+          canPublish: true,
+          canSubscribe: true,
+          canPublishData: true,
+        });
+
+        const jwt = await livekitToken.toJwt();
+
+        console.log("🔍 Generated BP session token for room:", {
+          room_name: interviewId,
+          agent_identity: `bey-agent-${interviewId}`,
+          token_length: jwt.length
+        });
+
+        // Create BP session with token
+        session = await bey.session.create({
+          avatar_id: process.env.BEY_AVATAR_ID!,
+          livekit_url: process.env.NEXT_PUBLIC_LIVEKIT_URL,
+          livekit_token: jwt,
+        });
+
+        console.log("✅ BP session created, agent auto-created by BP:", {
+          sessionId: session.id,
+          avatarId: session.avatar_id,
+          livekitUrl: session.livekit_url
+        });
+
+        // BP sessions are automatically active once created - no REST API calls needed
+        console.log("✅ Beyond Presence session created successfully:", {
+          sessionId: session.id,
+          avatarId: session.avatar_id,
+          livekitUrl: session.livekit_url,
+          roomName: interviewId,
+          transportType: 'livekit'
+        });
+
+        // Store session in memory for idempotency
+        if (idempotencyKey) {
+          activeSessions.set(idempotencyKey, {
+            sessionId: session.id,
+            roomName: interviewId,
+            createdAt: Date.now(),
+            status: "active"
+          });
+        }
+
+        // Return session details immediately - no additional REST calls needed
+        const responseData = {
+          sessionId: session.id,
+          avatarId: session.avatar_id,
+          livekitUrl: session.livekit_url,
+          startedAt: session.created_at,
+          transportType: "livekit",
+          roomName: interviewId,
+          status: "active",
+        };
+
+        console.log("🔍 Returning session data:", responseData);
+        return NextResponse.json(responseData);
+
+      } catch (error: any) {
+        console.error("❌ Beyond Presence session creation failed:", {
+          error: error.message,
+          status: error.status,
+          response: error.response?.data
+        });
+        throw error;
+      }
 
   } catch (error) {
-    console.error("Error creating Beyond Presence session:", error);
+    console.error("❌ Error creating Beyond Presence session:", error);
+
+    // Provide more specific error messages
+    let errorMessage = "Unknown error";
+    if (error instanceof Error) {
+      errorMessage = error.message;
+
+      // Check for credential-related errors
+      if (errorMessage.includes("401") || errorMessage.includes("Unauthorized")) {
+        errorMessage = "Invalid Beyond Presence credentials. Please verify BEY_API_KEY and BEY_AVATAR_ID.";
+      } else if (errorMessage.includes("404") || errorMessage.includes("Not Found")) {
+        errorMessage = "Beyond Presence avatar not found. Please verify BEY_AVATAR_ID.";
+      } else if (errorMessage.includes("403") || errorMessage.includes("Forbidden")) {
+        errorMessage = "Beyond Presence API access denied. Please verify BEY_API_KEY permissions.";
+      }
+    }
+
     return NextResponse.json(
-      { error: `Failed to create session: ${error instanceof Error ? error.message : 'Unknown error'}` },
+      { error: `Failed to create session: ${errorMessage}` },
       { status: 500 }
     );
   }

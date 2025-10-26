@@ -12,6 +12,8 @@ services:
       DEFAULT_VECTORIZER_MODULE: 'none'
       ENABLE_MODULES: 'text2vec-openai,text2vec-cohere,text2vec-huggingface,ref2vec-centroid,generative-openai,qna-openai'
       CLUSTER_HOSTNAME: 'node1'
+    env_file:
+      - .env
     volumes:
       - weaviate_data:/var/lib/weaviate
     restart: unless-stopped
@@ -23,37 +25,39 @@ services:
       start_period: 30s
 
   # Next.js Application
-  app:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: ai-interview-app
-    ports:
-      - "3000:3000"
-    environment:
-      - NODE_ENV=production
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - WEAVIATE_URL=http://weaviate:8080
-      - WEAVIATE_API_KEY=${WEAVIATE_API_KEY}
-      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET}
-      - NEXTAUTH_URL=http://localhost:3000
-      - DATABASE_URL=${DATABASE_URL}
-      - PHOENIX_API_KEY=${PHOENIX_API_KEY}
-      - PHOENIX_ENDPOINT=${PHOENIX_ENDPOINT}
-    depends_on:
-      weaviate:
-        condition: service_healthy
-    restart: unless-stopped
-    volumes:
-      - ./app:/app/app
-      - ./lib:/app/lib
-      - ./public:/app/public
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
+  # app:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile
+  #   container_name: ai-interview-app
+  #   ports:
+  #     - "3000:3000"
+  #   environment:
+  #     - NODE_ENV=production
+  #     - OPENAI_API_KEY=${OPENAI_API_KEY}
+  #     - WEAVIATE_URL=http://weaviate:8080
+  #     - WEAVIATE_API_KEY=${WEAVIATE_API_KEY}
+  #     - NEXTAUTH_SECRET=${NEXTAUTH_SECRET}
+  #     - NEXTAUTH_URL=http://localhost:3000
+  #     - DATABASE_URL=${DATABASE_URL}
+  #     - PHOENIX_API_KEY=${PHOENIX_API_KEY}
+  #     - PHOENIX_ENDPOINT=${PHOENIX_ENDPOINT}
+  #   env_file:
+  #     - .env
+  #   depends_on:
+  #     weaviate:
+  #       condition: service_healthy
+  #   restart: unless-stopped
+  #   volumes:
+  #     - ./app:/app/app
+  #     - ./lib:/app/lib
+  #     - ./public:/app/public
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 3
+  #     start_period: 40s
 
   # Phoenix for LLM Observability (Optional)
   phoenix:
@@ -63,6 +67,8 @@ services:
       - "6006:6006"
     environment:
       - PHOENIX_API_KEY=${PHOENIX_API_KEY}
+    env_file:
+      - .env
     restart: unless-stopped
     profiles:
       - observability

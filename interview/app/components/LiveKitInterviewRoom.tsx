@@ -115,12 +115,6 @@ export default function LiveKitInterviewRoom({
         }
       });
 
-      // Handle DataChannel errors gracefully
-      newRoom.on(RoomEvent.DataChannelError, (error) => {
-        console.warn("DataChannel error (non-critical):", error);
-        // Don't disconnect on DataChannel errors as they're often non-critical
-      });
-
       // Handle connection errors
       newRoom.on(RoomEvent.ConnectionStateChanged, (state) => {
         console.log("Connection state changed:", state);

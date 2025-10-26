@@ -1,12 +1,15 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, Suspense } from "react";
 import { Mic, AlertCircle } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import CameraPermissionPrompt from "../components/CameraPermissionPrompt";
-import BeyondPresenceInterviewRoom from "../components/BeyondPresenceInterviewRoom";
+import SimpleBPInterviewRoom from "../components/SimpleBPInterviewRoom";
 
-export default function RespondentInterface() {
+// Force dynamic rendering for this page
+export const dynamic = 'force-dynamic';
+
+function RespondentInterfaceContent() {
   const searchParams = useSearchParams();
   const [permissionsGranted, setPermissionsGranted] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
@@ -94,10 +97,11 @@ export default function RespondentInterface() {
 
   if (isConnected && permissionsGranted) {
     return (
-      <BeyondPresenceInterviewRoom
+      <SimpleBPInterviewRoom
         sessionId={sessionId}
         participantEmail={participantEmail}
         researchGoal={session?.researchGoal}
+        interviewScript={session?.script}
         onDisconnect={handleDisconnect}
       />
     );
@@ -185,5 +189,20 @@ export default function RespondentInterface() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function RespondentInterface() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen bg-gradient-to-br from-green-50 to-blue-100 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+          <p className="text-gray-600">Loading...</p>
+        </div>
+      </div>
+    }>
+      <RespondentInterfaceContent />
+    </Suspense>
   );
 }

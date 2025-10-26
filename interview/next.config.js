@@ -6,6 +6,7 @@ const nextConfig = {
   },
   env: {
     CUSTOM_KEY: process.env.CUSTOM_KEY,
+    WEAVIATE_HOST: process.env.WEAVIATE_HOST || 'localhost:8081',
   },
   experimental: {
     serverComponentsExternalPackages: ['weaviate-ts-client'],

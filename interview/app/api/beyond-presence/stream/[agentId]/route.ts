@@ -56,7 +56,7 @@ export async function GET(
                 break;
               }
             } catch (error) {
-              console.log(`Endpoint ${endpoint} failed:`, error.message);
+              console.log(`Endpoint ${endpoint} failed:`, error instanceof Error ? error.message : String(error));
             }
           }
 
@@ -137,10 +137,10 @@ export async function GET(
               }
             }
           } else {
-            const errorText = await response.text();
+            const errorText = response ? await response.text() : 'No response received';
             console.error("Beyond Presence stream error:", {
-              status: response.status,
-              statusText: response.statusText,
+              status: response?.status,
+              statusText: response?.statusText,
               errorText,
               sessionId: agentId
             });
@@ -148,7 +148,7 @@ export async function GET(
               new TextEncoder().encode(
                 `data: ${JSON.stringify({
                   type: "error",
-                  message: `Beyond Presence API error: ${response.status} - ${errorText}`,
+                  message: `Beyond Presence API error: ${response?.status || 'unknown'} - ${errorText}`,
                 })}\n\n`
               )
             );

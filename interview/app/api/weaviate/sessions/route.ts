@@ -2,12 +2,12 @@ import { NextRequest, NextResponse } from 'next/server';
 import weaviate from 'weaviate-ts-client';
 
 // Initialize Weaviate client
-let client;
+let client: any;
 try {
   client = weaviate.client({
     scheme: 'http',
-    host: process.env.WEAVIATE_HOST || 'localhost:8080',
-    apiKey: process.env.WEAVIATE_API_KEY,
+    host: 'localhost:8081',
+    apiKey: process.env.WEAVIATE_API_KEY as any,
   });
 } catch (error) {
   console.error('Failed to initialize Weaviate client:', error);
@@ -164,8 +164,6 @@ async function createSession(sessionData: any) {
 
     return {
       id: result.id,
-      sessionId,
-      sessionUrl,
       ...sessionObject
     };
   } catch (error) {
