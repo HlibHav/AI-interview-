@@ -37,9 +37,13 @@ yarn-error.log*
 .env.test.local
 .env.production.local
 *.env
+.env.backup
+.env.local.backup
 config.json
 secrets.json
 credentials.json
+auth.json
+tokens.json
 
 # API Keys and sensitive files
 *.key
@@ -49,10 +53,28 @@ credentials.json
 *.crt
 *.cer
 *.der
+*.jks
+*.keystore
 id_rsa*
 id_dsa*
 id_ecdsa*
 id_ed25519*
+
+# Database and connection strings
+database.json
+connection.json
+db.json
+
+# Cloud provider credentials
+aws-credentials.json
+gcp-credentials.json
+azure-credentials.json
+*.credentials
+
+# Backup files that might contain secrets
+*.backup
+*.bak
+*.old
 
 # vercel
 .vercel

@@ -25,8 +25,103 @@ export default function SimpleBPInterviewRoom({
   const [agent, setAgent] = useState<any>(null);
   const [embedUrl, setEmbedUrl] = useState<string | null>(null);
   const [conversationUrl, setConversationUrl] = useState<string | null>(null);
+  const [transcript, setTranscript] = useState<any[]>([]);
+  const [isRecording, setIsRecording] = useState<boolean>(false);
   
   const startBtnLock = useRef(false);
+
+  // Function to add conversation entry to transcript
+  const addToTranscript = (speaker: string, text: string) => {
+    const entry = {
+      speaker,
+      text,
+      timestamp: new Date().toISOString()
+    };
+    setTranscript(prev => [...prev, entry]);
+    console.log('📝 Added to transcript:', entry);
+  };
+
+  // Simulate conversation for testing
+  const simulateConversation = () => {
+    if (researchGoal?.toLowerCase().includes('parent') || researchGoal?.toLowerCase().includes('child')) {
+      const conversation = [
+        { speaker: 'ai', text: 'Hello! Thank you for participating. Can you tell me about your experience as a young parent?' },
+        { speaker: 'participant', text: 'I became a parent at 22, and it was both exciting and overwhelming. The biggest challenge was balancing work, personal life, and caring for my child.' },
+        { speaker: 'ai', text: 'What specific aspects of parenting did you find most challenging?' },
+        { speaker: 'participant', text: 'Sleep deprivation was huge. Also, knowing when to seek medical advice versus handling things myself. I constantly questioned if I was doing things right.' },
+        { speaker: 'ai', text: 'How did you build your confidence as a parent?' },
+        { speaker: 'participant', text: 'I joined a local parenting group and connected with other young parents online. Having a community who understood what I was going through made a huge difference.' },
+        { speaker: 'ai', text: 'What advice would you give to other young parents?' },
+        { speaker: 'participant', text: 'Trust your instincts, but don\'t be afraid to ask for help. Find your support network early - whether it\'s family, friends, or parent groups.' }
+      ];
+      
+      conversation.forEach((entry, index) => {
+        setTimeout(() => {
+          addToTranscript(entry.speaker, entry.text);
+        }, index * 2000); // Add each entry every 2 seconds
+      });
+    }
+  };
+
+  // Function to update session transcript
+  const updateSessionTranscript = async () => {
+    try {
+      const response = await fetch('/api/sessions/update-transcript', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          sessionId,
+          transcript
+        }),
+      });
+
+      if (response.ok) {
+        console.log('✅ Transcript updated in session');
+      } else {
+        console.error('❌ Failed to update transcript');
+      }
+    } catch (error) {
+      console.error('❌ Error updating transcript:', error);
+    }
+  };
+
+  // Function to complete session with real data
+  const completeSession = async () => {
+    try {
+      setAgentStatus('Completing session...');
+      
+      // First update the transcript
+      await updateSessionTranscript();
+      
+      // Then complete the session
+      const response = await fetch('/api/sessions/real-complete', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          sessionId
+        }),
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        console.log('✅ Session completed with real data:', result);
+        setAgentStatus('Session completed successfully!');
+        
+        // Show completion message
+        alert('Interview completed! Check the admin dashboard for insights and analysis.');
+      } else {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to complete session');
+      }
+    } catch (error) {
+      console.error('❌ Error completing session:', error);
+      setError(`Failed to complete session: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  };
 
   const generateSystemPrompt = (researchGoal?: string, interviewScript?: any): string => {
     const basePrompt = `You are an AI research interviewer conducting a qualitative interview. Your role is to:
@@ -44,15 +139,50 @@ Guidelines:
 - Avoid leading questions
 - Be empathetic and non-judgmental`;
 
+    let prompt = basePrompt;
+
     if (researchGoal) {
-      return `${basePrompt}
+      prompt += `
 
 Research Goal: ${researchGoal}
 
 Focus your questions on understanding this specific research goal. Tailor your questions to gather insights related to this topic.`;
     }
 
-    return basePrompt;
+    // If we have an interview script, incorporate it into the prompt
+    if (interviewScript) {
+      prompt += `
+
+Interview Script:
+${interviewScript.introduction || "Welcome to our research interview."}
+
+Questions to cover:`;
+      
+      if (interviewScript.questions && interviewScript.questions.length > 0) {
+        interviewScript.questions.forEach((q: any, idx: number) => {
+          prompt += `
+${idx + 1}. ${q.text}${q.topic ? ` (Topic: ${q.topic})` : ""}`;
+        });
+      }
+
+      if (interviewScript.followUps) {
+        prompt += `
+
+Follow-up questions for deeper exploration:`;
+        Object.entries(interviewScript.followUps).forEach(([questionId, followUps]: [string, any]) => {
+          if (Array.isArray(followUps) && followUps.length > 0) {
+            prompt += `
+For question ${questionId}: ${followUps.join(", ")}`;
+          }
+        });
+      }
+
+      prompt += `
+
+Follow this script but feel free to ask follow-up questions based on the participant's responses. Adapt the conversation naturally while covering all the planned topics.`;
+    }
+
+    return prompt;
   };
 
   const start = React.useCallback(async () => {
@@ -63,6 +193,14 @@ Focus your questions on understanding this specific research goal. Tailor your q
     try {
       setState('initializing');
       setAgentStatus('Creating AI agent...');
+
+      // Debug: Log the script data being passed
+      console.log("🔍 Script data received:", {
+        hasScript: !!interviewScript,
+        scriptType: typeof interviewScript,
+        scriptKeys: interviewScript ? Object.keys(interviewScript) : [],
+        scriptContent: interviewScript
+      });
 
       // Step 1: Create BP Agent using our API route (avoids CORS issues)
       console.log("🤖 Creating BP Agent with Create Agent API...");
@@ -159,6 +297,20 @@ Focus your questions on understanding this specific research goal. Tailor your q
               Stop
             </button>
             <button
+              className="px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white rounded-lg font-medium" 
+              onClick={completeSession}
+              disabled={transcript.length === 0}
+            >
+              Complete Interview
+            </button>
+            <button
+              className="px-4 py-2 bg-purple-600 hover:bg-purple-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white rounded-lg font-medium" 
+              onClick={simulateConversation}
+              disabled={transcript.length > 0}
+            >
+              Simulate Conversation
+            </button>
+            <button
               className="px-4 py-2 bg-gray-600 hover:bg-gray-700 text-white rounded-lg font-medium" 
               onClick={disconnect}
             >
@@ -244,6 +396,28 @@ Focus your questions on understanding this specific research goal. Tailor your q
               {participantEmail && <p>Participant: {participantEmail}</p>}
               {researchGoal && <p>Research Goal: {researchGoal}</p>}
             </div>
+
+            {/* Live Transcript Display */}
+            {transcript.length > 0 && (
+              <div className="mt-6 bg-gray-700 rounded-lg p-4">
+                <h3 className="text-lg font-semibold mb-3">Live Transcript ({transcript.length} exchanges)</h3>
+                <div className="max-h-60 overflow-y-auto space-y-2">
+                  {transcript.map((entry, index) => (
+                    <div key={index} className={`p-2 rounded ${
+                      entry.speaker === 'ai' ? 'bg-blue-900' : 'bg-green-900'
+                    }`}>
+                      <div className="text-xs text-gray-400 mb-1">
+                        {entry.speaker === 'ai' ? 'AI Interviewer' : 'Participant'} - {new Date(entry.timestamp).toLocaleTimeString()}
+                      </div>
+                      <div className="text-sm">{entry.text}</div>
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-3 text-xs text-gray-400">
+                  💡 Tip: Use the "Complete Interview" button when you're done to generate insights and analysis.
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>

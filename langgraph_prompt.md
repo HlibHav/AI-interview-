@@ -572,3 +572,4 @@ async def handle_beyond_presence_message(message: str, session_id: str):
 5. **Modular**: Each agent is independently testable
 6. **Observable**: Phoenix tracing for debugging and evaluation
 
+

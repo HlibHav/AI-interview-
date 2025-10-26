@@ -281,3 +281,4 @@ export default function Home() {
 
 Build this interface with attention to detail, smooth animations, and an intuitive user experience that makes AI-powered interviews feel natural and professional.
 
+

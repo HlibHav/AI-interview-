@@ -1,28 +1,24 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
-    // Basic health check
-    const health = {
+    return NextResponse.json({
       status: 'healthy',
       timestamp: new Date().toISOString(),
-      uptime: process.uptime(),
-      environment: process.env.NODE_ENV,
-      services: {
-        openai: process.env.OPENAI_API_KEY ? 'configured' : 'missing',
-        weaviate: process.env.WEAVIATE_URL ? 'configured' : 'missing',
-        phoenix: process.env.PHOENIX_API_KEY ? 'configured' : 'missing',
+      message: 'AI Interview Assistant API is running',
+      environment: {
+        nodeEnv: process.env.NODE_ENV,
+        hasOpenAIKey: !!process.env.OPENAI_API_KEY,
+        hasWeaviateHost: !!process.env.WEAVIATE_HOST,
       }
-    };
-
-    return NextResponse.json(health, { status: 200 });
+    });
   } catch (error) {
     return NextResponse.json(
       { 
-        status: 'unhealthy', 
+        status: 'error', 
         error: error instanceof Error ? error.message : 'Unknown error',
         timestamp: new Date().toISOString()
-      }, 
+      },
       { status: 500 }
     );
   }

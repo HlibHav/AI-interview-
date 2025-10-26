@@ -6,6 +6,7 @@
 export interface SessionData {
   sessionId: string;
   researchGoal: string;
+  researchGoalId?: string;  // NEW: Tenant identifier based on research goal
   targetAudience?: string;
   duration?: number;
   sensitivity?: string;

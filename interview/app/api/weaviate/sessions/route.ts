@@ -4,9 +4,18 @@ import weaviate from 'weaviate-ts-client';
 // Initialize Weaviate client
 let client: any;
 try {
+  const weaviateHost = process.env.WEAVIATE_HOST || 'localhost:8081';
+  const isCloud = weaviateHost.includes('.weaviate.network') || weaviateHost.includes('.weaviate.cloud');
+  
+  console.log('🔗 [WEAVIATE] Initializing client:', {
+    host: weaviateHost,
+    isCloud,
+    hasApiKey: !!process.env.WEAVIATE_API_KEY
+  });
+
   client = weaviate.client({
-    scheme: 'http',
-    host: 'localhost:8081',
+    scheme: isCloud ? 'https' : 'http',
+    host: weaviateHost,
     apiKey: process.env.WEAVIATE_API_KEY as any,
   });
 } catch (error) {

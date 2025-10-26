@@ -19,6 +19,8 @@ async function storeInWeaviate(className: string, data: any) {
 
 export async function POST(request: NextRequest) {
   try {
+    console.log('🔍 [CLARIFICATION] Request received');
+    
     // Check if OpenAI API key is configured
     if (!process.env.OPENAI_API_KEY) {
       console.error('❌ OPENAI_API_KEY is not configured');
@@ -28,7 +30,10 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { researchGoal, clarifications } = await request.json();
+    const body = await request.json();
+    console.log('🔍 [CLARIFICATION] Request body:', body);
+    
+    const { researchGoal, clarifications } = body;
     
     console.log('🔍 Clarification request:', { researchGoal, clarificationsCount: clarifications?.length || 0 });
     
