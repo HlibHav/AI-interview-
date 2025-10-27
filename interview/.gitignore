@@ -45,6 +45,10 @@ credentials.json
 auth.json
 tokens.json
 
+# Root-level .env files
+/.env.local
+/../.env.local
+
 # API Keys and sensitive files
 *.key
 *.pem
