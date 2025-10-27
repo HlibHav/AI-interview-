@@ -88,6 +88,7 @@ export const schemaClasses: SchemaClassDefinition[] = [
     description: 'Individual interview transcript chunks',
     properties: [
       { name: 'sessionId', dataType: ['text'] }, // backup text field
+      { name: 'turnIndex', dataType: ['int'] },
       { name: 'speaker', dataType: ['text'] },
       { name: 'text', dataType: ['text'] },
       { name: 'summary', dataType: ['text'] },
@@ -97,6 +98,25 @@ export const schemaClasses: SchemaClassDefinition[] = [
     ],
     references: [
       { name: 'session', targetClass: 'InterviewSession' }
+    ]
+  },
+  {
+    class: 'Annotation',
+    description: 'Human or AI labels applied to transcript content',
+    properties: [
+      { name: 'annotationId', dataType: ['text'] },
+      { name: 'type', dataType: ['text'] },
+      { name: 'label', dataType: ['text'] },
+      { name: 'notes', dataType: ['text'] },
+      { name: 'confidence', dataType: ['number'] },
+      { name: 'tags', dataType: ['text[]'] },
+      { name: 'createdAt', dataType: ['date'] },
+      { name: 'updatedAt', dataType: ['date'] },
+      { name: 'createdBy', dataType: ['text'] }
+    ],
+    references: [
+      { name: 'session', targetClass: 'InterviewSession' },
+      { name: 'chunk', targetClass: 'TranscriptChunk' }
     ]
   },
   {

@@ -131,7 +131,7 @@ export async function createObjectWithReferences(
   className: string,
   data: any,
   references?: Record<string, ReferenceValue>,
-  options?: { id?: string }
+  options?: { id?: string; vector?: number[] }
 ) {
   const weaviateClient = getWeaviateClient();
 
@@ -142,6 +142,10 @@ export async function createObjectWithReferences(
 
   if (options?.id) {
     creator = creator.withId(options.id);
+  }
+
+  if (options?.vector) {
+    creator = creator.withVector(options.vector);
   }
 
   const result = await creator.do();
@@ -163,16 +167,22 @@ export async function updateObjectWithReferences(
   className: string,
   uuid: string,
   data: any,
-  references?: Record<string, ReferenceValue>
+  references?: Record<string, ReferenceValue>,
+  options?: { vector?: number[] }
 ) {
   const weaviateClient = getWeaviateClient();
 
-  const result = await weaviateClient.data
+  let updater = weaviateClient.data
     .updater()
     .withClassName(className)
     .withId(uuid)
-    .withProperties(data)
-    .do();
+    .withProperties(data);
+
+  if (options?.vector) {
+    updater = updater.withVector(options.vector);
+  }
+
+  const result = await updater.do();
 
   await applyReferencesToObject(weaviateClient, className, uuid, references);
 
@@ -206,10 +216,11 @@ async function findReferencingObjects(targetClassName: string, targetUuid: strin
   const referenceMap: Record<string, string[]> = {
     ResearchGoal: ['QuestionPlan', 'InterviewSession', 'BatchSummary'],
     QuestionPlan: ['InterviewSession'],
-    InterviewSession: ['TranscriptChunk', 'PsychProfile', 'BatchSummary'],
-    TranscriptChunk: [],
+    InterviewSession: ['TranscriptChunk', 'PsychProfile', 'BatchSummary', 'Annotation'],
+    TranscriptChunk: ['Annotation'],
     PsychProfile: [],
-    BatchSummary: []
+    BatchSummary: [],
+    Annotation: []
   };
 
   const referencingClasses = Object.entries(referenceMap)
@@ -248,6 +259,7 @@ function referencePropertyForClass(className: string, targetClassName: string) {
     QuestionPlan: { ResearchGoal: 'researchGoal' },
     InterviewSession: { ResearchGoal: 'researchGoal' },
     TranscriptChunk: { InterviewSession: 'session' },
+    Annotation: { InterviewSession: 'session', TranscriptChunk: 'chunk' },
     PsychProfile: { InterviewSession: 'session' },
     BatchSummary: { ResearchGoal: 'researchGoal', InterviewSession: 'sessions' }
   };
