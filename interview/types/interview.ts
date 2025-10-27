@@ -22,19 +22,6 @@ export interface InterviewScript {
   reminders?: string[];
 }
 
-// LiveKit types
-export interface LiveKitTokenRequest {
-  roomName: string;
-  participantName: string;
-  participantMetadata?: string;
-}
-
-export interface LiveKitTokenResponse {
-  token: string;
-  roomName: string;
-  participantName: string;
-}
-
 // Beyond Presence types
 export interface BeyondPresenceAgent {
   id: string;
@@ -78,7 +65,6 @@ export interface InterviewSession {
   script?: InterviewScript;
   participantEmail?: string;
   roomName: string;
-  livekitToken?: string;
   beyondPresenceAgentId?: string;
   beyondPresenceSessionId?: string;
   status: "created" | "in_progress" | "completed" | "cancelled";
@@ -151,4 +137,3 @@ export interface SummarizerAgentResponse {
   themes: string[];
   recommendations: string[];
 }
-

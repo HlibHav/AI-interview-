@@ -26,6 +26,12 @@
     "paths": {
       "@/*": [
         "./*"
+      ],
+      "@/lib/*": [
+        "./lib/*"
+      ],
+      "@/lib/weaviate/*": [
+        "./lib/weaviate/*"
       ]
     }
   },

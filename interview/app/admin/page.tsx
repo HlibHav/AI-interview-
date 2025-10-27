@@ -1,10 +1,10 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { Send, Users, FileText, BarChart3, Settings, Eye, Clock, CheckCircle, XCircle, AlertCircle, ChevronDown, ChevronUp } from "lucide-react";
+import { Send, Users, FileText, BarChart3, Settings } from "lucide-react";
 
 const researchGoalSchema = z.object({
   goal: z.string().min(10, "Please provide a more detailed research goal"),
@@ -22,30 +22,6 @@ interface ClarificationMessage {
   timestamp: Date;
 }
 
-interface SessionData {
-  id: string;
-  sessionId: string;
-  sessionUrl: string;
-  researchGoal: string;
-  targetAudience?: string;
-  duration?: number;
-  sensitivity?: string;
-  participantEmail?: string;
-  participantName?: string;
-  status: 'created' | 'in_progress' | 'completed' | 'cancelled';
-  startTime?: string;
-  endTime?: string;
-  durationMinutes?: number;
-  script?: any;
-  transcript?: any[];
-  insights?: any;
-  psychometricProfile?: any;
-  summary?: string;
-  keyFindings?: string[];
-  createdAt: string;
-  createdBy?: string;
-}
-
 export default function AdminDashboard() {
   const [currentStep, setCurrentStep] = useState<"goal" | "clarification" | "script" | "sessions" | "analytics">("goal");
   const [clarificationMessages, setClarificationMessages] = useState<ClarificationMessage[]>([]);
@@ -57,9 +33,6 @@ export default function AdminDashboard() {
   const [isGeneratingScript, setIsGeneratingScript] = useState(false);
   const [sessionUrl, setSessionUrl] = useState<string | null>(null);
   const [isCreatingSession, setIsCreatingSession] = useState(false);
-  const [sessions, setSessions] = useState<SessionData[]>([]);
-  const [isLoadingSessions, setIsLoadingSessions] = useState(false);
-  const [expandedTranscripts, setExpandedTranscripts] = useState<Set<string>>(new Set());
 
   const form = useForm<ResearchGoalForm>({
     resolver: zodResolver(researchGoalSchema),
@@ -71,50 +44,12 @@ export default function AdminDashboard() {
     },
   });
 
-  // Fetch sessions when switching to sessions tab
-  const fetchSessions = async () => {
-    setIsLoadingSessions(true);
-    try {
-      const response = await fetch('/api/sessions');
-      if (response.ok) {
-        const result = await response.json();
-        setSessions(result.sessions || []);
-      } else {
-        console.error('Failed to fetch sessions');
-      }
-    } catch (error) {
-      console.error('Error fetching sessions:', error);
-    } finally {
-      setIsLoadingSessions(false);
-    }
-  };
-
-  // Load sessions when switching to sessions tab
-  useEffect(() => {
-    if (currentStep === 'sessions') {
-      fetchSessions();
-    }
-  }, [currentStep]);
-
-  // Toggle transcript expansion
-  const toggleTranscriptExpansion = (sessionId: string) => {
-    const newExpanded = new Set(expandedTranscripts);
-    if (newExpanded.has(sessionId)) {
-      newExpanded.delete(sessionId);
-    } else {
-      newExpanded.add(sessionId);
-    }
-    setExpandedTranscripts(newExpanded);
-  };
-
   const handleSubmitGoal = async (data: ResearchGoalForm) => {
     setIsGenerating(true);
     setError(null);
     setResearchGoalData(data);
     
     try {
-      console.log('🔍 [FRONTEND] Making clarification request:', data);
-      
       const response = await fetch('/api/agents/clarification', {
         method: 'POST',
         headers: {
@@ -126,17 +61,11 @@ export default function AdminDashboard() {
         }),
       });
 
-      console.log('🔍 [FRONTEND] Response status:', response.status);
-      console.log('🔍 [FRONTEND] Response headers:', response.headers);
-
       if (!response.ok) {
-        const errorText = await response.text();
-        console.error('❌ [FRONTEND] Error response:', errorText);
-        throw new Error(`Failed to get clarification questions: ${response.status} - ${errorText}`);
+        throw new Error('Failed to get clarification questions');
       }
 
       const result = await response.json();
-      console.log('✅ [FRONTEND] Success response:', result);
       
       if (result.status === "complete") {
         // If no clarification needed, move directly to script generation
@@ -167,8 +96,8 @@ export default function AdminDashboard() {
         setCurrentStep("clarification");
       }
     } catch (error) {
-      console.error('❌ [FRONTEND] Error getting clarification questions:', error);
-      setError(`Failed to generate clarification questions: ${error instanceof Error ? error.message : 'Unknown error'}. Please try again.`);
+      console.error('Error getting clarification questions:', error);
+      setError('Failed to generate clarification questions. Please try again.');
       
       // Fallback to basic questions if API fails
       setClarificationMessages([
@@ -689,253 +618,11 @@ export default function AdminDashboard() {
 
             {currentStep === "sessions" && (
               <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-8">
-                <div className="flex justify-between items-center mb-6">
-                  <h2 className="text-2xl font-bold text-gray-900">Interview Sessions</h2>
-                  <button
-                    onClick={fetchSessions}
-                    disabled={isLoadingSessions}
-                    className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50"
-                  >
-                    {isLoadingSessions ? 'Refreshing...' : 'Refresh'}
-                  </button>
+                <h2 className="text-2xl font-bold text-gray-900 mb-6">Interview Sessions</h2>
+                <div className="text-center py-12">
+                  <Users className="h-12 w-12 text-gray-400 mx-auto mb-4" />
+                  <p className="text-gray-500">No sessions yet. Approve a script to start collecting responses.</p>
                 </div>
-
-                {isLoadingSessions ? (
-                  <div className="flex items-center justify-center py-12">
-                    <div className="flex items-center space-x-3">
-                      <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600"></div>
-                      <p className="text-gray-600">Loading sessions...</p>
-                    </div>
-                  </div>
-                ) : sessions.length === 0 ? (
-                  <div className="text-center py-12">
-                    <Users className="h-12 w-12 text-gray-400 mx-auto mb-4" />
-                    <p className="text-gray-500">No sessions yet. Approve a script to start collecting responses.</p>
-                  </div>
-                ) : (
-                  <div className="space-y-6">
-                    {sessions.map((session) => (
-                      <div key={session.sessionId} className="border border-gray-200 rounded-lg p-6">
-                        <div className="flex justify-between items-start mb-4">
-                          <div className="flex-1">
-                            <div className="flex items-center space-x-3 mb-2">
-                              <h3 className="text-lg font-semibold text-gray-900">
-                                {session.researchGoal}
-                              </h3>
-                              <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                                session.status === 'completed' 
-                                  ? 'bg-green-100 text-green-800'
-                                  : session.status === 'in_progress'
-                                  ? 'bg-blue-100 text-blue-800'
-                                  : session.status === 'cancelled'
-                                  ? 'bg-red-100 text-red-800'
-                                  : 'bg-gray-100 text-gray-800'
-                              }`}>
-                                {session.status === 'completed' && <CheckCircle className="h-3 w-3 mr-1" />}
-                                {session.status === 'in_progress' && <Clock className="h-3 w-3 mr-1" />}
-                                {session.status === 'cancelled' && <XCircle className="h-3 w-3 mr-1" />}
-                                {session.status === 'created' && <AlertCircle className="h-3 w-3 mr-1" />}
-                                {session.status.charAt(0).toUpperCase() + session.status.slice(1)}
-                              </span>
-                            </div>
-                            <div className="text-sm text-gray-600 space-y-1">
-                              <p><strong>Participant:</strong> {session.participantEmail || 'Not specified'}</p>
-                              <p><strong>Created:</strong> {new Date(session.createdAt).toLocaleString()}</p>
-                              {session.startTime && (
-                                <p><strong>Started:</strong> {new Date(session.startTime).toLocaleString()}</p>
-                              )}
-                              {session.endTime && (
-                                <p><strong>Completed:</strong> {new Date(session.endTime).toLocaleString()}</p>
-                              )}
-                              {session.durationMinutes && (
-                                <p><strong>Duration:</strong> {session.durationMinutes} minutes</p>
-                              )}
-                            </div>
-                          </div>
-                          <div className="flex space-x-2">
-                            <a
-                              href={session.sessionUrl}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="px-3 py-1 bg-gray-100 text-gray-700 rounded-md hover:bg-gray-200 text-sm"
-                            >
-                              <Eye className="h-4 w-4 mr-1 inline" />
-                              View
-                            </a>
-                            {session.status === 'created' && (
-                              <button
-                                onClick={async () => {
-                                  try {
-                                    const response = await fetch('/api/sessions/manual-complete', {
-                                      method: 'POST',
-                                      headers: {
-                                        'Content-Type': 'application/json',
-                                      },
-                                      body: JSON.stringify({ sessionId: session.sessionId }),
-                                    });
-                                    
-                                    if (response.ok) {
-                                      alert('Session completed successfully! Refresh to see results.');
-                                      fetchSessions();
-                                    } else {
-                                      alert('Failed to complete session');
-                                    }
-                                  } catch (error) {
-                                    console.error('Error completing session:', error);
-                                    alert('Error completing session');
-                                  }
-                                }}
-                                className="px-3 py-1 bg-green-100 text-green-700 rounded-md hover:bg-green-200 text-sm"
-                              >
-                                Complete (Test)
-                              </button>
-                            )}
-                          </div>
-                        </div>
-
-                        {/* Session Summary and Insights */}
-                        {session.status === 'completed' && session.insights && (
-                          <div className="mt-6 space-y-4">
-                            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                              <h4 className="font-semibold text-blue-900 mb-2">Session Summary</h4>
-                              <p className="text-blue-800 text-sm">{session.summary || session.insights.summary}</p>
-                            </div>
-
-                            {session.insights.keyThemes && session.insights.keyThemes.length > 0 && (
-                              <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-                                <h4 className="font-semibold text-green-900 mb-2">Key Themes</h4>
-                                <div className="flex flex-wrap gap-2">
-                                  {session.insights.keyThemes.map((theme: string, index: number) => (
-                                    <span key={index} className="px-2 py-1 bg-green-100 text-green-800 rounded text-xs">
-                                      {theme}
-                                    </span>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
-
-                            {session.insights.keyInsights && session.insights.keyInsights.length > 0 && (
-                              <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
-                                <h4 className="font-semibold text-purple-900 mb-2">Key Insights</h4>
-                                <ul className="text-purple-800 text-sm space-y-1">
-                                  {session.insights.keyInsights.map((insight: string, index: number) => (
-                                    <li key={index} className="flex items-start">
-                                      <span className="text-purple-600 mr-2">•</span>
-                                      {insight}
-                                    </li>
-                                  ))}
-                                </ul>
-                              </div>
-                            )}
-
-                            {/* Psychometric Profile */}
-                            {session.psychometricProfile && (
-                              <div className="bg-orange-50 border border-orange-200 rounded-lg p-4">
-                                <h4 className="font-semibold text-orange-900 mb-3">Personality Profile</h4>
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                  {session.psychometricProfile.bigFive && (
-                                    <div>
-                                      <h5 className="font-medium text-orange-800 mb-2">Big Five Traits</h5>
-                                      <div className="space-y-2 text-sm">
-                                        {Object.entries(session.psychometricProfile.bigFive).map(([trait, data]: [string, any]) => (
-                                          <div key={trait} className="flex justify-between items-center">
-                                            <span className="text-orange-700 capitalize">{trait}:</span>
-                                            <div className="flex items-center space-x-2">
-                                              <div className="w-16 bg-orange-200 rounded-full h-2">
-                                                <div 
-                                                  className="bg-orange-600 h-2 rounded-full" 
-                                                  style={{ width: `${data.score || 0}%` }}
-                                                ></div>
-                                              </div>
-                                              <span className="text-orange-800 font-medium">{data.score || 0}</span>
-                                            </div>
-                                          </div>
-                                        ))}
-                                      </div>
-                                    </div>
-                                  )}
-                                  {session.psychometricProfile.enneagram && (
-                                    <div>
-                                      <h5 className="font-medium text-orange-800 mb-2">Enneagram Type</h5>
-                                      <div className="text-sm text-orange-700">
-                                        <p><strong>Type {session.psychometricProfile.enneagram.type}</strong></p>
-                                        <p className="mt-1">{session.psychometricProfile.enneagram.description}</p>
-                                      </div>
-                                    </div>
-                                  )}
-                                </div>
-                              </div>
-                            )}
-
-                            {/* Recommendations */}
-                            {session.insights.recommendations && session.insights.recommendations.length > 0 && (
-                              <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-                                <h4 className="font-semibold text-yellow-900 mb-2">Recommendations</h4>
-                                <ul className="text-yellow-800 text-sm space-y-1">
-                                  {session.insights.recommendations.map((rec: string, index: number) => (
-                                    <li key={index} className="flex items-start">
-                                      <span className="text-yellow-600 mr-2">•</span>
-                                      {rec}
-                                    </li>
-                                  ))}
-                                </ul>
-                              </div>
-                            )}
-                          </div>
-                        )}
-
-                        {/* Transcript Preview for Completed Sessions */}
-                        {session.status === 'completed' && session.transcript && session.transcript.length > 0 && (
-                          <div className="mt-6">
-                            <div className="flex items-center justify-between mb-3">
-                              <h4 className="font-semibold text-gray-900">Transcript</h4>
-                              <button
-                                onClick={() => toggleTranscriptExpansion(session.sessionId)}
-                                className="flex items-center space-x-1 text-sm text-blue-600 hover:text-blue-800"
-                              >
-                                {expandedTranscripts.has(session.sessionId) ? (
-                                  <>
-                                    <ChevronUp className="h-4 w-4" />
-                                    <span>Collapse</span>
-                                  </>
-                                ) : (
-                                  <>
-                                    <ChevronDown className="h-4 w-4" />
-                                    <span>Expand ({session.transcript.length} exchanges)</span>
-                                  </>
-                                )}
-                              </button>
-                            </div>
-                            <div className={`bg-gray-50 border border-gray-200 rounded-lg p-4 ${
-                              expandedTranscripts.has(session.sessionId) ? 'max-h-none' : 'max-h-40'
-                            } overflow-y-auto`}>
-                              <div className="space-y-2 text-sm">
-                                {(expandedTranscripts.has(session.sessionId) 
-                                  ? session.transcript 
-                                  : session.transcript.slice(0, 5)
-                                ).map((entry: any, index: number) => (
-                                  <div key={index} className="flex">
-                                    <span className={`font-medium mr-2 ${
-                                      entry.speaker === 'ai' ? 'text-blue-600' : 'text-green-600'
-                                    }`}>
-                                      {entry.speaker === 'ai' ? 'AI:' : 'Participant:'}
-                                    </span>
-                                    <span className="text-gray-700">{entry.text}</span>
-                                  </div>
-                                ))}
-                                {!expandedTranscripts.has(session.sessionId) && session.transcript.length > 5 && (
-                                  <p className="text-gray-500 text-xs italic">
-                                    ... and {session.transcript.length - 5} more exchanges
-                                  </p>
-                                )}
-                              </div>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                )}
               </div>
             )}
 

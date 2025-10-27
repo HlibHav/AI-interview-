@@ -22,7 +22,7 @@ async function storeInWeaviate(className: string, data: any) {
 
 export async function POST(request: NextRequest) {
   try {
-    const { fullTranscript, summaries } = await request.json();
+    const { fullTranscript, researchGoal, summaries } = await request.json();
 
     const systemPrompt = `You are a psychologist. Based on this conversation, estimate the participant's openness, conscientiousness, extraversion, agreeableness and neuroticism on a 0–100 scale. Provide a brief justification for each score. If possible, guess the Enneagram type (1–9) with a sentence of reasoning. Output a JSON object with \`traits\` and \`explanation\` fields.
 
@@ -32,7 +32,8 @@ Guidelines:
 - Provide detailed reasoning for each personality trait score.
 - Consider both explicit statements and implicit behavioral patterns.`;
 
-    const userPrompt = `Full Interview Transcript: ${fullTranscript}
+    const userPrompt = `Research Goal: ${researchGoal}
+Full Interview Transcript: ${fullTranscript}
 Session Summaries: ${JSON.stringify(summaries)}
 
 Analyze the participant's personality and provide a comprehensive psychometric profile. Return a JSON object with:

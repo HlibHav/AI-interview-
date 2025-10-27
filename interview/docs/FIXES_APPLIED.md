@@ -53,8 +53,7 @@ OPENAI_APIKEY=your_openai_api_key_here  # Weaviate requires this spelling
 6. Enter email and click "Start Interview"
 7. Grant camera/microphone permissions
 8. **✅ Verify:** You should stay on the interview page (not redirect to admin)
-9. **✅ Verify:** LiveKit room should initialize
-10. **✅ Verify:** Beyond Presence avatar should load
+9. **✅ Verify:** Beyond Presence avatar should load
 
 ### Test 2: Weaviate Integration
 1. After adding `OPENAI_APIKEY` to `.env.local`
@@ -108,4 +107,3 @@ Both issues have been resolved:
 - ✅ Weaviate configuration documented
 
 The app is now ready for a clean test of the complete interview flow!
-

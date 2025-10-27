@@ -8,7 +8,7 @@ const openai = new OpenAI({
 // Helper function to search Weaviate for similar content
 async function searchWeaviate(className: string, query: string, limit: number = 5) {
   try {
-    const response = await fetch('http://localhost:3000/api/weaviate', {
+    const response = await fetch(`${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'}/api/weaviate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ 
@@ -17,6 +17,11 @@ async function searchWeaviate(className: string, query: string, limit: number = 
         data: { query, limit, nearText: query } 
       })
     });
+    
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+    
     return await response.json();
   } catch (error) {
     console.error('Weaviate search error:', error);
@@ -45,7 +50,7 @@ Guidelines:
     // Search for similar responses in Weaviate for context (optional)
     let similarContext = '';
     try {
-      const similarResponses = await searchWeaviate('InterviewChunk', participantResponse, 3);
+      const similarResponses = await searchWeaviate('TranscriptChunk', participantResponse, 3);
       similarContext = similarResponses.results?.map((r: any) => r.text).join('\n') || '';
     } catch (error) {
       console.log('Weaviate search skipped:', error);

@@ -1,10 +1,15 @@
 import { NextRequest } from "next/server";
+import { upsertInterviewChunks } from '@/lib/weaviate/weaviate-session';
 
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ agentId: string }> }
 ) {
   const { agentId } = await params;
+  
+  // Extract sessionId from query params
+  const url = new URL(request.url);
+  const sessionId = url.searchParams.get('sessionId');
 
   if (!agentId) {
     return new Response("Session ID is required", { status: 400 });
@@ -31,10 +36,8 @@ export async function GET(
         try {
           // Try different Beyond Presence API endpoints
           const endpoints = [
-            `/v1/sessions/${agentId}/messages`,
-            `/v1/sessions/${agentId}/events`,
-            `/v1/sessions/${agentId}/stream`,
-            `/v1/sessions/${agentId}`
+            `/v1/calls/${agentId}/messages`,
+            `/v1/calls/${agentId}`
           ];
           
           let response = null;
@@ -69,20 +72,43 @@ export async function GET(
 
           if (response && response.ok) {
             const data = await response.json();
+            
+            // BEY API returns array directly for /v1/calls/{id}/messages
+            const messages = Array.isArray(data) ? data : data.messages || [];
+            
             console.log("Beyond Presence response:", { 
               workingEndpoint,
-              dataKeys: Object.keys(data),
-              messageCount: data.messages?.length || 0, 
+              dataKeys: Array.isArray(data) ? 'array' : Object.keys(data),
+              messageCount: messages.length, 
               lastMessageCount,
-              hasNewMessages: data.messages && data.messages.length > lastMessageCount
+              hasNewMessages: messages.length > lastMessageCount
             });
             
-            if (data.messages && data.messages.length > lastMessageCount) {
+            if (messages.length > lastMessageCount) {
               // Send only new messages
-              const newMessages = data.messages.slice(lastMessageCount);
-              lastMessageCount = data.messages.length;
+              const newMessages = messages.slice(lastMessageCount);
+              lastMessageCount = messages.length;
               
               console.log("Sending new messages:", newMessages.length);
+              
+              // Save to Weaviate if sessionId is available
+              if (sessionId && newMessages.length > 0) {
+                try {
+                  const transcriptEntries = newMessages.map((msg: any) => ({
+                    speaker: msg.sender === 'ai' ? 'agent' : 'participant',
+                    text: msg.message || msg.text || '',
+                    timestamp: msg.sent_at || msg.timestamp || new Date().toISOString(),
+                    raw: msg
+                  })).filter((entry: any) => entry.text);
+                  
+                  if (transcriptEntries.length > 0) {
+                    await upsertInterviewChunks(sessionId, sessionId, transcriptEntries);
+                    console.log(`Saved ${transcriptEntries.length} messages to Weaviate`);
+                  }
+                } catch (weaviateError) {
+                  console.error("Error saving to Weaviate:", weaviateError);
+                }
+              }
               
               for (const message of newMessages) {
                 if (message.type === "audio" && message.audio_url) {

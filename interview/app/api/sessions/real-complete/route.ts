@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { fetchInterviewSession } from '@/lib/weaviate/weaviate-session';
 
 // Global session storage declaration
 declare global {
@@ -26,7 +27,17 @@ export async function POST(request: NextRequest) {
     }
 
     // Get session from memory store
-    const session = sessions.get(sessionId);
+    let session = sessions.get(sessionId);
+    if (!session) {
+      try {
+        session = await fetchInterviewSession(sessionId);
+        if (session) {
+          sessions.set(sessionId, session);
+        }
+      } catch (error) {
+        console.warn('⚠️ [REAL COMPLETE] Failed to load session from Weaviate:', error);
+      }
+    }
     if (!session) {
       return NextResponse.json(
         { success: false, error: 'Session not found' },
@@ -36,13 +47,12 @@ export async function POST(request: NextRequest) {
 
     // Check if session has actual transcript data
     if (!session.transcript || session.transcript.length === 0) {
-      return NextResponse.json(
-        { success: false, error: 'No transcript data found. Please conduct an interview first.' },
-        { status: 400 }
-      );
+      console.warn('⚠️ [REAL COMPLETE] Session has no transcript entries prior to completion', { sessionId });
+    } else {
+      console.log('📊 [REAL COMPLETE] Found transcript with', session.transcript.length, 'exchanges');
     }
 
-    console.log('📊 [REAL COMPLETE] Found transcript with', session.transcript.length, 'exchanges');
+    const transcriptPayload = Array.isArray(session.transcript) ? session.transcript : [];
 
     // Call the session completion API with the actual transcript
     const completionResponse = await fetch(`${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'}/api/sessions/complete`, {
@@ -52,7 +62,7 @@ export async function POST(request: NextRequest) {
       },
       body: JSON.stringify({
         sessionId,
-        transcript: session.transcript,
+        transcript: transcriptPayload,
         researchGoal: session.researchGoal
       }),
     });

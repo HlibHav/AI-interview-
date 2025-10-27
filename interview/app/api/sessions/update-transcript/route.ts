@@ -1,4 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
+import {
+  upsertInterviewSession,
+  fetchInterviewSession
+} from '@/lib/weaviate/weaviate-session';
 
 // Global session storage declaration
 declare global {
@@ -14,10 +18,13 @@ sessions = global.sessionsStore;
 
 export async function POST(request: NextRequest) {
   try {
-    const { sessionId, transcript } = await request.json();
+    const { sessionId, transcript, beyondPresenceAgentId } = await request.json();
 
-    console.log('📝 [UPDATE TRANSCRIPT] Updating transcript for session:', sessionId);
-    console.log('📝 [UPDATE TRANSCRIPT] Transcript entries:', transcript?.length || 0);
+    console.log('🛰️ [UPDATE TRANSCRIPT] Incoming request', {
+      sessionId,
+      entries: transcript?.length || 0,
+      hasBeyAgentId: Boolean(beyondPresenceAgentId)
+    });
 
     if (!sessionId) {
       return NextResponse.json(
@@ -26,8 +33,19 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Get session from memory store
-    const session = sessions.get(sessionId);
+    // Get session from memory or Weaviate
+    let session = sessions.get(sessionId);
+    if (!session) {
+      try {
+        session = await fetchInterviewSession(sessionId);
+        if (session) {
+          sessions.set(sessionId, session);
+        }
+      } catch (error) {
+        console.warn('⚠️ [UPDATE TRANSCRIPT] Failed to load session from Weaviate:', error);
+      }
+    }
+
     if (!session) {
       return NextResponse.json(
         { success: false, error: 'Session not found' },
@@ -39,14 +57,24 @@ export async function POST(request: NextRequest) {
     const updatedSession = {
       ...session,
       transcript: transcript || [],
+      beyondPresenceAgentId: beyondPresenceAgentId || session.beyondPresenceAgentId,
       status: session.status === 'created' ? 'in_progress' : session.status,
       startTime: session.startTime || new Date().toISOString()
     };
 
-    // Update in memory store
+    // Update in memory store and persist to Weaviate
     sessions.set(sessionId, updatedSession);
+    try {
+      await upsertInterviewSession(updatedSession);
+      console.log('✅ [UPDATE TRANSCRIPT] Persisted session to Weaviate', {
+        sessionId,
+        entries: updatedSession.transcript.length
+      });
+    } catch (weaviateError) {
+      console.warn('⚠️ [UPDATE TRANSCRIPT] Failed to persist transcript to Weaviate:', weaviateError);
+    }
 
-    console.log('✅ [UPDATE TRANSCRIPT] Transcript updated successfully');
+    console.log('✅ [UPDATE TRANSCRIPT] Transcript updated in memory');
 
     return NextResponse.json({
       success: true,

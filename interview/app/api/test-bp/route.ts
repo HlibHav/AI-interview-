@@ -15,18 +15,8 @@ export async function POST(request: NextRequest) {
 
     console.log("✅ BP instance created");
 
-    // Test 2: Create session with minimal LiveKit params
-    const session = await bey.session.create({
-      avatar_id: process.env.BEY_AVATAR_ID!,
-      livekit_url: process.env.NEXT_PUBLIC_LIVEKIT_URL || "ws://localhost:7880",
-      livekit_token: "dummy-token" // Temporary dummy token for testing
-    });
-
-    console.log("✅ BP session created:", session.id);
-
     return NextResponse.json({
       success: true,
-      sessionId: session.id,
       message: "Beyond Presence SDK test successful"
     });
 

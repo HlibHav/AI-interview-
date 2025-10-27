@@ -1,21 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import weaviate from 'weaviate-ts-client';
+import { v4 as uuidv4 } from 'uuid';
 
 // Initialize Weaviate client
 let client: any;
 try {
-  const weaviateHost = process.env.WEAVIATE_HOST || 'localhost:8081';
-  const isCloud = weaviateHost.includes('.weaviate.network') || weaviateHost.includes('.weaviate.cloud');
-  
-  console.log('🔗 [WEAVIATE] Initializing client:', {
-    host: weaviateHost,
-    isCloud,
-    hasApiKey: !!process.env.WEAVIATE_API_KEY
-  });
-
   client = weaviate.client({
-    scheme: isCloud ? 'https' : 'http',
-    host: weaviateHost,
+    scheme: 'http',
+    host: 'localhost:8081',
     apiKey: process.env.WEAVIATE_API_KEY as any,
   });
 } catch (error) {
@@ -36,7 +28,6 @@ const InterviewSessionSchema = {
     { name: 'participantEmail', dataType: ['text'] },
     { name: 'participantName', dataType: ['text'] },
     { name: 'roomName', dataType: ['text'] },
-    { name: 'livekitToken', dataType: ['text'] },
     { name: 'beyondPresenceAgentId', dataType: ['text'] },
     { name: 'beyondPresenceSessionId', dataType: ['text'] },
     { name: 'status', dataType: ['text'] }, // created, in_progress, completed, cancelled
@@ -131,7 +122,7 @@ async function createSession(sessionData: any) {
       throw new Error('Weaviate client not initialized');
     }
 
-    const sessionId = sessionData.sessionId || `session-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const sessionId = sessionData.sessionId || uuidv4();
     const sessionUrl = `${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'}/respondent?session=${sessionId}`;
     
     const sessionObject = {
@@ -144,7 +135,6 @@ async function createSession(sessionData: any) {
       participantEmail: sessionData.participantEmail || '',
       participantName: sessionData.participantName || '',
       roomName: sessionData.roomName || `interview-${sessionId}`,
-      livekitToken: sessionData.livekitToken || '',
       beyondPresenceAgentId: sessionData.beyondPresenceAgentId || '',
       beyondPresenceSessionId: sessionData.beyondPresenceSessionId || '',
       status: sessionData.status || 'created',
@@ -190,7 +180,7 @@ async function getSession(sessionId: string) {
     const result = await client.graphql
       .get()
       .withClassName('InterviewSession')
-      .withFields('sessionId sessionUrl researchGoal targetAudience duration sensitivity participantEmail participantName roomName livekitToken beyondPresenceAgentId beyondPresenceSessionId status startTime endTime durationMinutes script transcript insights psychometricProfile keyFindings summary createdAt updatedAt createdBy tags isPublic accessCode')
+      .withFields('sessionId sessionUrl researchGoal targetAudience duration sensitivity participantEmail participantName roomName beyondPresenceAgentId beyondPresenceSessionId status startTime endTime durationMinutes script transcript insights psychometricProfile keyFindings summary createdAt updatedAt createdBy tags isPublic accessCode')
       .withWhere({
         path: ['sessionId'],
         operator: 'Equal',
@@ -319,7 +309,7 @@ async function listSessions(filters: any = {}) {
     const result = await client.graphql
       .get()
       .withClassName('InterviewSession')
-      .withFields('sessionId sessionUrl researchGoal targetAudience duration sensitivity participantEmail participantName roomName livekitToken beyondPresenceAgentId beyondPresenceSessionId status startTime endTime durationMinutes script transcript insights psychometricProfile keyFindings summary createdAt updatedAt createdBy tags isPublic accessCode')
+      .withFields('sessionId sessionUrl researchGoal targetAudience duration sensitivity participantEmail participantName roomName beyondPresenceAgentId beyondPresenceSessionId status startTime endTime durationMinutes script transcript insights psychometricProfile keyFindings summary createdAt updatedAt createdBy tags isPublic accessCode')
       .withWhere(whereClause)
       .withLimit(filters.limit || 50)
       .do();

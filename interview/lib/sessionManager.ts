@@ -13,7 +13,6 @@ export interface SessionData {
   participantEmail?: string;
   participantName?: string;
   roomName?: string;
-  livekitToken?: string;
   beyondPresenceAgentId?: string;
   beyondPresenceSessionId?: string;
   status?: 'created' | 'in_progress' | 'completed' | 'cancelled';

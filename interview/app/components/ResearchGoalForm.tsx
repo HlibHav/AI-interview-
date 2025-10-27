@@ -90,10 +90,11 @@ export default function ResearchGoalForm({ onSubmit, isLoading = false }: Resear
               className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-900"
               disabled={isSubmitting || isLoading}
             >
+              <option value="5">5 minutes</option>
+              <option value="10">10 minutes</option>
               <option value="15">15 minutes</option>
+              <option value="20">20 minutes</option>
               <option value="30">30 minutes</option>
-              <option value="45">45 minutes</option>
-              <option value="60">60 minutes</option>
             </select>
           </div>
         </div>

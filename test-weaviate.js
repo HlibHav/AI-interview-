@@ -65,7 +65,7 @@ async function testWeaviateIntegration() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         action: 'store',
-        className: 'InterviewChunk',
+        className: 'TranscriptChunk',
         data: chunkData
       })
     });
@@ -84,7 +84,7 @@ async function testWeaviateIntegration() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         action: 'search',
-        className: 'InterviewChunk',
+        className: 'TranscriptChunk',
         data: {
           query: "dating app preferences",
           limit: 3,

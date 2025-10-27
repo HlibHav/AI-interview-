@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 
 interface SimpleBPInterviewRoomProps {
   sessionId: string;
@@ -26,8 +26,10 @@ export default function SimpleBPInterviewRoom({
   const [embedUrl, setEmbedUrl] = useState<string | null>(null);
   const [conversationUrl, setConversationUrl] = useState<string | null>(null);
   const [transcript, setTranscript] = useState<any[]>([]);
-  const [isRecording, setIsRecording] = useState<boolean>(false);
-  
+  const [beyAgentId, setBeyAgentId] = useState<string | null>(null);
+  const beyAgentIdRef = useRef<string | null>(null);
+  const exportInFlightRef = useRef(false);
+  const exportCompletedRef = useRef(false);
   const startBtnLock = useRef(false);
 
   // Function to add conversation entry to transcript
@@ -64,8 +66,18 @@ export default function SimpleBPInterviewRoom({
   };
 
   // Function to update session transcript
-  const updateSessionTranscript = async () => {
+  const updateSessionTranscript = useCallback(
+    async (overrides?: { entries?: any[]; agentId?: string }) => {
     try {
+      console.log('🛰️ [SIMPLE ROOM] Updating transcript via /api/sessions/update-transcript', {
+        sessionId,
+        entries: overrides?.entries ? overrides.entries.length : transcript.length,
+        hasBeyAgentId: Boolean(overrides?.agentId || beyAgentId || beyAgentIdRef.current)
+      });
+
+      const transcriptPayload = overrides?.entries ?? transcript;
+      const agentIdPayload = overrides?.agentId ?? beyAgentId ?? beyAgentIdRef.current;
+
       const response = await fetch('/api/sessions/update-transcript', {
         method: 'POST',
         headers: {
@@ -73,26 +85,98 @@ export default function SimpleBPInterviewRoom({
         },
         body: JSON.stringify({
           sessionId,
-          transcript
+          transcript: transcriptPayload,
+          beyondPresenceAgentId: agentIdPayload
         }),
       });
 
       if (response.ok) {
-        console.log('✅ Transcript updated in session');
+        const result = await response.json();
+        console.log('✅ [SIMPLE ROOM] Transcript update succeeded', {
+          updatedEntries: transcript.length,
+          sessionStatus: result.session?.status
+        });
       } else {
-        console.error('❌ Failed to update transcript');
+        const errorText = await response.text();
+        console.error('❌ [SIMPLE ROOM] Transcript update failed', {
+          status: response.status,
+          statusText: response.statusText,
+          body: errorText
+        });
       }
     } catch (error) {
-      console.error('❌ Error updating transcript:', error);
+      console.error('❌ [SIMPLE ROOM] Error updating transcript:', error);
     }
-  };
+  }, [sessionId, transcript, beyAgentId]);
+
+  const triggerTranscriptExport = useCallback(
+    async (reason: string) => {
+      if (exportInFlightRef.current) {
+        console.log('ℹ️ [SIMPLE ROOM] Export already in flight, skipping duplicate trigger', {
+          reason,
+          sessionId
+        });
+        return;
+      }
+
+      exportInFlightRef.current = true;
+      try {
+        const agentIdentifier = beyAgentIdRef.current || beyAgentId;
+        const payload: Record<string, any> = { sessionId };
+        if (agentIdentifier) {
+          payload.beyAgentId = agentIdentifier;
+        }
+
+        console.log('🛰️ [SIMPLE ROOM] Triggering Beyond Presence transcript export', {
+          reason,
+          hasAgentId: Boolean(agentIdentifier),
+          sessionId
+        });
+
+        const response = await fetch('/api/beyond-presence/export-transcript', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(payload)
+        });
+
+        const exportPayload = await response.json();
+        console.log('🛰️ [SIMPLE ROOM] Export attempt result', {
+          reason,
+          status: response.status,
+          ok: response.ok,
+          exportPayload
+        });
+
+        if (response.ok) {
+          exportCompletedRef.current = true;
+        }
+      } catch (exportError) {
+        console.error('⚠️ [SIMPLE ROOM] Export attempt failed', {
+          reason,
+          error: exportError
+        });
+      } finally {
+        exportInFlightRef.current = false;
+      }
+    },
+    [beyAgentId, sessionId]
+  );
 
   // Function to complete session with real data
   const completeSession = async () => {
     try {
       setAgentStatus('Completing session...');
+      if (transcript.length === 0) {
+        console.warn('⚠️ [SIMPLE ROOM] Local transcript is empty before completion');
+      }
+      console.log('🟡 [SIMPLE ROOM] Completing session', {
+        sessionId,
+        localEntries: transcript.length
+      });
       
-      // First update the transcript
+      // First persist the transcript (even if empty) and agent metadata
       await updateSessionTranscript();
       
       // Then complete the session
@@ -108,9 +192,11 @@ export default function SimpleBPInterviewRoom({
 
       if (response.ok) {
         const result = await response.json();
-        console.log('✅ Session completed with real data:', result);
+        console.log('✅ [SIMPLE ROOM] Session completed with real data', result);
         setAgentStatus('Session completed successfully!');
-        
+
+        await triggerTranscriptExport('session-complete');
+
         // Show completion message
         alert('Interview completed! Check the admin dashboard for insights and analysis.');
       } else {
@@ -118,7 +204,7 @@ export default function SimpleBPInterviewRoom({
         throw new Error(errorData.error || 'Failed to complete session');
       }
     } catch (error) {
-      console.error('❌ Error completing session:', error);
+      console.error('❌ [SIMPLE ROOM] Error completing session:', error);
       setError(`Failed to complete session: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   };
@@ -185,10 +271,12 @@ Follow this script but feel free to ask follow-up questions based on the partici
     return prompt;
   };
 
-  const start = React.useCallback(async () => {
+  const start = useCallback(async () => {
     if (startBtnLock.current) return;
     startBtnLock.current = true;
     setError(null);
+    exportCompletedRef.current = false;
+    exportInFlightRef.current = false;
 
     try {
       setState('initializing');
@@ -241,7 +329,18 @@ Follow this script but feel free to ask follow-up questions based on the partici
       setAgent(agentData.agent);
       setEmbedUrl(generatedEmbedUrl);
       setConversationUrl(generatedConversationUrl);
-      
+      setBeyAgentId(agentData.agent.id);
+      beyAgentIdRef.current = agentData.agent.id;
+      console.log('✅ [SIMPLE ROOM] Stored Beyond Presence agent info', {
+        agentId: agentData.agent.id
+      });
+
+      // Persist agent metadata even before transcript entries exist
+      void updateSessionTranscript({
+        entries: transcript,
+        agentId: agentData.agent.id
+      });
+
       setAgentStatus('Agent created successfully');
       setState('connected');
 
@@ -252,21 +351,77 @@ Follow this script but feel free to ask follow-up questions based on the partici
     } finally {
       startBtnLock.current = false;
     }
-  }, [sessionId, participantEmail, researchGoal, interviewScript]);
+  }, [sessionId, researchGoal, interviewScript, updateSessionTranscript, transcript]);
 
-  const stop = React.useCallback(async () => {
+  const stop = useCallback(async () => {
+    if (beyAgentIdRef.current || beyAgentId) {
+      await triggerTranscriptExport('manual-stop');
+    } else {
+      console.warn('ℹ️ [SIMPLE ROOM] No Beyond Presence agent identifier available during stop');
+    }
+
     setState('idle');
     setError(null);
     setAgentStatus('Disconnected');
     setAgent(null);
     setEmbedUrl(null);
     setConversationUrl(null);
-  }, []);
+    setBeyAgentId(null);
+    beyAgentIdRef.current = null;
+    console.log('ℹ️ [SIMPLE ROOM] Interview stopped, local state reset');
+  }, [triggerTranscriptExport, beyAgentId]);
 
   const disconnect = async () => {
     await stop();
     onDisconnect?.();
   };
+
+  useEffect(() => {
+    return () => {
+      if (!exportCompletedRef.current) {
+        void triggerTranscriptExport('component-unmount');
+      }
+    };
+  }, [triggerTranscriptExport]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const handleBeforeUnload = () => {
+      if (exportCompletedRef.current) {
+        return;
+      }
+
+      const agentIdentifier = beyAgentIdRef.current || beyAgentId;
+      if (!agentIdentifier) {
+        return;
+      }
+
+      const payload = JSON.stringify({
+        sessionId,
+        beyAgentId: agentIdentifier
+      });
+
+      try {
+        const endpoint = `${window.location.origin}/api/beyond-presence/export-transcript`;
+        const blob = new Blob([payload], { type: 'application/json' });
+        const success = navigator.sendBeacon(endpoint, blob);
+        console.log('📡 [SIMPLE ROOM] sendBeacon export attempt before unload', {
+          success,
+          sessionId
+        });
+      } catch (error) {
+        console.warn('⚠️ [SIMPLE ROOM] sendBeacon export failed', error);
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [beyAgentId, sessionId]);
 
   return (
     <div className="min-h-screen bg-gray-900 text-white p-6">
@@ -299,7 +454,6 @@ Follow this script but feel free to ask follow-up questions based on the partici
             <button
               className="px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white rounded-lg font-medium" 
               onClick={completeSession}
-              disabled={transcript.length === 0}
             >
               Complete Interview
             </button>

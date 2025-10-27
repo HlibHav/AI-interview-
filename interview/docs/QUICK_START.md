@@ -5,7 +5,6 @@
 ### Prerequisites
 - Node.js 18+ installed
 - npm or pnpm
-- LiveKit server access (or use LiveKit Cloud)
 - Beyond Presence API key
 - OpenAI API key
 
@@ -26,12 +25,6 @@ cp env.example .env.local
 ```env
 # OpenAI (Required)
 OPENAI_API_KEY=sk-...
-
-# LiveKit (Required for video)
-LIVEKIT_URL=wss://your-project.livekit.cloud
-LIVEKIT_API_KEY=APIxxxxxxxxxxxx
-LIVEKIT_API_SECRET=xxxxxxxxxxxxx
-NEXT_PUBLIC_LIVEKIT_URL=wss://your-project.livekit.cloud
 
 # Beyond Presence (Required for avatars)
 BEY_API_KEY=bey_...
@@ -76,11 +69,6 @@ Visit: http://localhost:3000
 
 ## Troubleshooting
 
-### "Failed to connect to LiveKit"
-- Check `LIVEKIT_URL` is correct (must start with `wss://`)
-- Verify `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET` are set
-- Test connection: https://livekit.io/cloud
-
 ### "Beyond Presence initialization failed"
 - Verify `BEY_API_KEY` is valid
 - Check `BEY_AVATAR_ID` exists
@@ -97,12 +85,6 @@ Visit: http://localhost:3000
 - Ensure API key has proper permissions
 
 ## Getting API Keys
-
-### LiveKit (Free Tier Available)
-1. Sign up at https://livekit.io/
-2. Create a project
-3. Get API Key and Secret from dashboard
-4. Copy WebSocket URL (wss://...)
 
 ### Beyond Presence
 1. Sign up at https://bey.dev/
@@ -154,4 +136,3 @@ Understand user behavior patterns through structured interviews.
 - Production deployment (Vercel/AWS)
 - Analytics dashboard
 - Email notifications
-

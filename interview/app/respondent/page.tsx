@@ -3,7 +3,6 @@
 import { useState, useEffect, Suspense } from "react";
 import { Mic, AlertCircle } from "lucide-react";
 import { useSearchParams } from "next/navigation";
-import CameraPermissionPrompt from "../components/CameraPermissionPrompt";
 import SimpleBPInterviewRoom from "../components/SimpleBPInterviewRoom";
 
 // Force dynamic rendering for this page
@@ -18,7 +17,6 @@ function RespondentInterfaceContent() {
   const [session, setSession] = useState<any>(null);
   const [isLoadingSession, setIsLoadingSession] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [showEmailInput, setShowEmailInput] = useState(true);
 
   useEffect(() => {
     // Extract session ID from URL (support both sessionId and session parameters)
@@ -54,14 +52,15 @@ function RespondentInterfaceContent() {
       setError("Please enter your email address");
       return;
     }
-    setShowEmailInput(false);
+    // Skip intermediate screens and go directly to BP agent
+    setPermissionsGranted(true);
+    setIsConnected(true);
   };
 
   const handleDisconnect = () => {
     setIsConnected(false);
     setPermissionsGranted(false);
-    setShowEmailInput(true);
-    // Don't redirect to home, stay on respondent page for restart
+    // Reset to email input screen for restart
   };
 
   if (isLoadingSession) {
@@ -107,19 +106,7 @@ function RespondentInterfaceContent() {
     );
   }
 
-  if (!showEmailInput) {
-    return (
-      <CameraPermissionPrompt
-        onPermissionsGranted={() => {
-          setPermissionsGranted(true);
-          setIsConnected(true);
-        }}
-        onPermissionsDenied={() => {
-          setError("Camera and microphone permissions are required for the interview.");
-        }}
-      />
-    );
-  }
+  // Removed intermediate camera permission screen - going directly to BP agent
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-green-50 to-blue-100 flex items-center justify-center p-4">

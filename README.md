@@ -1,118 +1,110 @@
-# AI‑Interview Assistant: Project Overview
+# AI Interview Assistant Project
 
-This repository contains the code and documentation for an AI‑powered
-interview assistant built for a hackathon.  The goal is to allow research
-teams to run qualitative interviews without human moderators.  An AI agent
-introduces itself, asks open questions, listens attentively and generates
-follow‑ups.  The system transcribes audio in real time, summarises
-responses, derives psychological profiles and provides actionable insights.
+A comprehensive AI-powered user research interview platform that conducts qualitative interviews without human moderators.
 
-## Features
+## Project Overview
 
-- **Script generation:** Given a research goal, the assistant asks
-  clarifying questions and produces an interview plan with an introduction
-  and 5–8 open questions.  Researchers can edit the script before
-  approving it.
- - **Voice/video interviewing via Beyond Presence:** Respondents click a link,
-  grant microphone (and optionally camera) access and participate in a
-  recorded conversation powered by **Beyond Presence’s Managed Agents**.  The
-  platform streams audio to a hyper‑realistic avatar, handles
-  speech‑to‑text/–to‑video conversion and allows pausing and resuming【413673914178042†L23-L39】.
- - **Real‑time transcription and summarisation:** Beyond Presence returns
-  transcripts from the audio stream.  Our summariser agent condenses each
-  answer into semantic chunks and stores them in **Weaviate**, eliminating
-  the need for a separate STT pipeline.
-- **Psychometric profiling:** After the interview, the system estimates
-  Big Five personality traits (openness, conscientiousness, extraversion,
-  agreeableness and neuroticism) and optionally an Enneagram type, then
-  renders a radar chart.
-- **Observability and evaluation:** Integration with **Phoenix** collects
-  traces from the agents and evaluates responses using built‑in and
-  third‑party metrics【336324534843598†L119-L133】.  This helps debug
-  latency issues and measure answer relevance.
-- **Retrieval‑augmented generation:** All data (goals, plans, transcripts)
-  are stored in **Weaviate**.  Agents use vector search to recall
-  context and generate informed questions and summaries.
+This project consists of a Next.js application that provides AI-powered interview capabilities for user research and market validation studies.
 
-## Architecture summary
+## Repository Structure
 
-The system is divided into three major layers:
+```
+interview/
+├── interview/                     # Main Next.js application
+│   ├── app/                      # Next.js app directory
+│   ├── lib/                      # Shared utilities and libraries
+│   ├── types/                    # TypeScript definitions
+│   └── public/                   # Static assets
+├── docs/                         # Project documentation
+│   ├── architecture.md          # System architecture
+│   ├── technical_design.md       # Technical design document
+│   ├── evaluation_plan.md        # Evaluation methodology
+│   └── ...                      # Other documentation files
+├── scripts/                      # Setup and deployment scripts
+│   ├── setup.sh                 # Main setup script
+│   ├── setup-weaviate.sh        # Weaviate setup
+│   └── deploy.sh                # Deployment script
+├── config/                       # Configuration files
+│   ├── docker-compose.yml        # Docker configuration
+│   ├── Dockerfile               # Container definition
+│   └── env.example              # Environment variables template
+└── requirements.txt              # Python dependencies
+```
 
-1. **Front end (React/Next.js):** Contains the admin console and
-   respondent interface.  Communicates with the back end via REST and
-   WebRTC.
-2. **Back end (FastAPI or Node):** Hosts the LLM agent orchestrator, Weaviate
-   client and Phoenix instrumentation.  It manages session state and
-   coordinates agents.  Audio and video streaming are delegated to
-   **Beyond Presence’s Managed Agents**, so no separate STT/TTS pipelines are
-   required.
-3. **Data stores:** Weaviate holds vectorised data for retrieval.  Phoenix
-   stores traces and evaluation metrics.  See `architecture.md` for a
-   component‑level diagram and `ai_architecture_specification.md` for a
-   behavioural specification of the agents and memory.
+## Quick Start
 
-## Getting started
-
-1. **Install dependencies**
-
-   ```bash
-   # Clone this repository
-   git clone <your‑repo‑url>
-   cd ai‑interview‑assistant
-
-   # Install Python packages
-   pip install -r requirements.txt
-
-   # Install Phoenix instrumentation (optional but recommended)
-   pip install arize-phoenix-otel openinference-instrumentation-openai
-   ```
-
-2. **Run Weaviate**
-
-   Start a local Weaviate instance using Docker:
-
-   ```bash
-   docker run -p 8080:8080 -e QUERY_DEFAULTS_LIMIT=20 \
-     -e AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED=true \
-     semitechnologies/weaviate:1.24.0
-   ```
-
-3. **Launch Phoenix (optional)**
-
-   Install the CLI and start a server locally:
-
-   ```bash
-   pip install arize-phoenix
-   phoenix serve
-   ```
-
-   Set environment variables in your shell or `.env` file:
-
-   ```bash
-   export PHOENIX_API_KEY=your_api_key
-   export PHOENIX_COLLECTOR_ENDPOINT=http://localhost:6006
-   ```
-
-4. **Start the back end**
-
-   ```bash
-   uvicorn app.main:app --reload
-   ```
-
-5. **Start the front end**
-
+1. **Setup the environment**:
    ```bash
    cd interview
    npm install
+   ```
+
+2. **Configure environment variables**:
+   ```bash
+   cp ../config/env.example .env.local
+   ```
+
+3. **Start the development server**:
+   ```bash
    npm run dev
    ```
 
-Visit `http://localhost:3000` to access the admin dashboard and create a research goal. Use the generated link to simulate a respondent session.
+## Key Components
 
-**Note:** The main application is located in the `interview/` directory.
+### Frontend Application (`interview/`)
+- Next.js 14 application with TypeScript
+- Admin dashboard for creating and managing interviews
+- Respondent interface for participating in interviews
+- Real-time AI agent integration
 
-## License
+### AI Agents (`interview/app/api/agents/`)
+- **Interviewer**: Main conversation agent
+- **Planner**: Interview planning and script generation
+- **Psychometric**: Personality analysis and profiling
+- **Summarizer**: Interview summarization and insights
+- **Clarification**: Follow-up question generation
 
-This project is provided for educational purposes during a hackathon.  It may
-contain dependencies governed by separate open‑source licenses.  Use it at
-your own risk.
+### Database Integration (`interview/lib/weaviate/`)
+- Weaviate vector database for storing interview data
+- Session management and transcript storage
+- Reference utilities for data relationships
+- Schema definitions and helpers
+
+### Documentation (`docs/`)
+- Architecture specifications
+- Technical design documents
+- Evaluation plans and methodologies
+- Implementation guides
+
+## Features
+
+- **AI-Powered Interviewing**: Natural conversation flow with AI agents
+- **Psychological Profiling**: Big Five and Enneagram personality analysis
+- **Real-time Processing**: Live transcription and analysis
+- **Session Management**: Complete interview lifecycle
+- **Vector Database**: Efficient storage and retrieval of interview data
+
+## Development
+
+### Prerequisites
+- Node.js 18+
+- npm or yarn
+- Docker (for Weaviate)
+- OpenAI API key
+
+### Scripts
+- `npm run dev` - Start development server
+- `npm run build` - Build for production
+- `npm run lint` - Run ESLint
+- `npm run api` - Start API server on port 3001
+
+## Deployment
+
+Use the scripts in the `scripts/` directory:
+- `setup.sh` - Initial project setup
+- `deploy.sh` - Production deployment
+- `setup-weaviate.sh` - Database setup
+
+## Contributing
+
+Please refer to the documentation in the `docs/` directory for detailed information about the architecture, implementation, and contribution guidelines.

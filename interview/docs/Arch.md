@@ -7,7 +7,6 @@ This document describes the end-to-end architecture of the AI Interview Assistan
 - **Backend runtime**: Next.js API routes sharing the same deployment as the UI; no separate server is required.
 - **External services**:
   - OpenAI GPT-4 for reasoning across all agent flows.
-  - LiveKit for WebRTC rooms (media transport).
   - Beyond Presence (BEY) for avatar-controlled AI interviewers.
   - Weaviate vector database for long-term research memory.
   - Optional Phoenix for LLM observability/telemetry.
@@ -16,7 +15,7 @@ This document describes the end-to-end architecture of the AI Interview Assistan
 1. **Research setup**: Admin defines a research goal in the dashboard (`app/admin/page.tsx`). The UI uses React Hook Form + Zod to validate inputs and calls `/api/agents/clarification` for refinement.
 2. **Script generation**: Once clarified, `/api/agents/planner` transforms briefs into structured interview scripts (intro, questions, follow-ups).
 3. **Session provisioning**: `/api/sessions` (in-memory) issues a shareable respondent link; `SessionManager` can mirror data into Weaviate (`app/api/weaviate/sessions/route.ts`).
-4. **Interview execution**: Respondent joins `/respondent`, granting media permissions and launching `BeyondPresenceInterviewRoom`. The component initializes a BEY agent, waits for LiveKit readiness, and connects both parties.
+4. **Interview execution**: Respondent joins `/respondent`, grants media permissions, and launches `SimpleBPInterviewRoom`, which embeds the Beyond Presence agent for the live conversation.
 5. **Live intelligence**: During the interview, orchestration can call `/api/agents/interviewer` for dynamic follow-ups and `/api/agents/summarizer` to capture transcript chunks with key insights.
 6. **Post-interview analytics**: `/api/agents/psychometric` builds Big Five + Enneagram profiles. Admin analytics (`app/admin/analytics/page.tsx`) renders aggregated dashboards with Recharts.
 
@@ -33,15 +32,12 @@ This document describes the end-to-end architecture of the AI Interview Assistan
 
 ### Respondent Experience (`app/respondent`)
 - Fetches session metadata (goal, context) on load; enforces email capture.
-- `CameraPermissionPrompt` mediates device access before connecting to LiveKit.
-- `BeyondPresenceInterviewRoom` manages agent initialization, LiveKit connection, track subscription, conversation log, and cleanup.
-- Fallback logic (e.g., `hardDisconnect`) protects against partial failures.
+- `SimpleBPInterviewRoom` creates the Beyond Presence agent, renders the iframe conversation, and keeps a lightweight transcript for completion flows.
+- Participants can simulate conversations for demos or complete a session to trigger summaries and psychometrics.
 
 ### Shared Components & Utilities
 - UI primitives live under `app/components` and `app/components/ui`.
 - Interview transport helpers:
-  - `app/lib/bp.ts`: idempotent Beyond Presence session creation and readiness polling.
-  - `app/lib/livekit.ts`: LiveKit token fetch + connection + agent track waiters.
   - `app/lib/sessionManager.ts`: API wrapper that abstracts session CRUD and schema bootstrap against Weaviate-backed storage.
 
 ## 4. Backend / API Layer
@@ -62,14 +58,10 @@ This document describes the end-to-end architecture of the AI Interview Assistan
 - `sessions/route.ts`: Dedicated schema and CRUD for `InterviewSession`.
 - Schema creation is lazy; on-demand calls initialize classes if absent.
 
-### LiveKit & Beyond Presence
-- `app/api/livekit-token/route.ts`: Mints JWTs via `livekit-server-sdk`, granting scoped publish/subscribe rights.
-- `app/api/beyond-presence/*`:
-  - `initialize`: Builds agent prompt (including script, goals) and registers an avatar with BEY.
-  - `create-session`: Exchanges LiveKit tokens, creates BEY session, and caches results for idempotency.
-  - `session-status`: Polls BEY for readiness; used before joining LiveKit to avoid empty rooms.
-  - `cleanup`: Tears down sessions to limit resource use.
-- `app/api/direct-interview/start/route.ts`: Lightweight path for LiveKit-only interviews without avatars.
+### Beyond Presence API
+- `app/api/beyond-presence/create-agent`: Builds prompts and registers interview agents with BEY.
+- `app/api/beyond-presence/export-transcript`: Pulls conversation data from BEY and persists it to Weaviate.
+- `app/api/beyond-presence/initialize`: Legacy prompt-builder used by older flows (optional).
 
 ### Auxiliary APIs
 - `/api/health`: Used by Docker health checks and setup automation.
@@ -88,7 +80,6 @@ This document describes the end-to-end architecture of the AI Interview Assistan
 ## 6. External Configuration
 - `.env.local` derived from `env.example` captures:
   - `OPENAI_API_KEY`, `WEAVIATE_HOST`, `WEAVIATE_API_KEY`
-  - `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, `NEXT_PUBLIC_LIVEKIT_URL`
   - `BEY_API_KEY`, `BEY_AVATAR_ID`, optional Phoenix variables
 - `setup.sh` bootstraps dependencies, starts Weaviate via Docker Compose, runs readiness checks, and smoke-tests critical endpoints.
 
@@ -102,18 +93,16 @@ This document describes the end-to-end architecture of the AI Interview Assistan
 - **Health monitoring**: `/api/health` plus console logs provide operational visibility; Phoenix can capture LLM traces when enabled.
 
 ## 8. Observability & Logging
-- Verbose logging across API routes traces agent requests, LiveKit token generation, and Beyond Presence lifecycle events.
+- Verbose logging across API routes traces agent requests and Beyond Presence lifecycle events.
 - Phoenix integration (optional) enables deeper inspection of prompts, completions, and latency if instrumented.
 
 ## 9. Extensibility & Future Work
 - Agents are modular—new behaviors can be added under `app/api/agents/<new-agent>` and consumed from the UI.
 - `SessionManager` abstraction allows migrating from in-memory storage to any persistence layer while preserving the UI contract.
-- `app/lib/bp.ts` and `app/lib/livekit.ts` centralize media orchestration logic, simplifying swaps to alternative avatar or RTC providers.
 - Current `/api/sessions` responses can be enhanced to stream live transcripts or insights as they are stored in Weaviate.
 
 ## 10. Security & Privacy Notes
 - Clarification prompts encourage admins to flag sensitive topics; interview scripts include consent reminders.
-- LiveKit tokens are minted server-side with strict room scoping.
 - Weaviate storage calls should be secured with API keys and TLS in production deployments.
 - Future enhancements should include authentication/authorization for admin routes, encrypted storage for transcripts, and GDPR-compliant retention policies.
 

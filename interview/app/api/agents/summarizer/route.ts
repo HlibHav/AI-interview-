@@ -69,7 +69,7 @@ Generate a summary and extract key insights. Return a JSON object with:
       timestamp: new Date().toISOString()
     };
     
-    await storeInWeaviate('InterviewChunk', chunkData);
+    await storeInWeaviate('TranscriptChunk', chunkData);
 
     return NextResponse.json({
       success: true,

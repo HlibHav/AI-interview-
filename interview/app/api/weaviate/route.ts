@@ -1,74 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
-import weaviate from 'weaviate-ts-client';
+import { schemaClasses } from '@/lib/weaviate/weaviate-schema';
+import {
+  createObjectWithReferences,
+  getWeaviateClient
+} from '@/lib/weaviate/weaviate-helpers';
 
-// Initialize Weaviate client
 let client: any;
 try {
-  const host = 'localhost:8081';
-  console.log('Initializing Weaviate client with host:', host);
-  client = weaviate.client({
-    scheme: 'http',
-    host: host,
-    apiKey: process.env.WEAVIATE_API_KEY as any,
-  });
-  console.log('Weaviate client initialized successfully');
+  client = getWeaviateClient();
+  console.log('✅ [WEAVIATE] Client ready');
 } catch (error) {
-  console.error('Failed to initialize Weaviate client:', error);
+  console.error('❌ [WEAVIATE] Failed to initialize client:', error);
 }
-
-// Define schema classes
-const schemaClasses = [
-  {
-    class: 'ResearchGoal',
-    description: 'Research goals and objectives',
-    properties: [
-      { name: 'goalText', dataType: ['text'] },
-      { name: 'targetAudience', dataType: ['text'] },
-      { name: 'duration', dataType: ['int'] },
-      { name: 'sensitivity', dataType: ['text'] },
-      { name: 'createdAt', dataType: ['date'] }
-    ]
-  },
-  {
-    class: 'QuestionPlan',
-    description: 'Interview question plans and scripts',
-    properties: [
-      { name: 'researchGoalId', dataType: ['text'] },
-      { name: 'introduction', dataType: ['text'] },
-      { name: 'questions', dataType: ['text[]'] },
-      { name: 'followUps', dataType: ['text'] },
-      { name: 'createdAt', dataType: ['date'] }
-    ]
-  },
-  {
-    class: 'InterviewChunk',
-    description: 'Individual interview transcript chunks',
-    properties: [
-      { name: 'sessionId', dataType: ['text'] },
-      { name: 'speaker', dataType: ['text'] },
-      { name: 'text', dataType: ['text'] },
-      { name: 'summary', dataType: ['text'] },
-      { name: 'keywords', dataType: ['text[]'] },
-      { name: 'sentiment', dataType: ['text'] },
-      { name: 'timestamp', dataType: ['date'] }
-    ]
-  },
-  {
-    class: 'PsychProfile',
-    description: 'Psychological profiles from interviews',
-    properties: [
-      { name: 'sessionId', dataType: ['text'] },
-      { name: 'openness', dataType: ['number'] },
-      { name: 'conscientiousness', dataType: ['number'] },
-      { name: 'extraversion', dataType: ['number'] },
-      { name: 'agreeableness', dataType: ['number'] },
-      { name: 'neuroticism', dataType: ['number'] },
-      { name: 'enneagramType', dataType: ['int'] },
-      { name: 'explanation', dataType: ['text'] },
-      { name: 'createdAt', dataType: ['date'] }
-    ]
-  }
-];
 
 export async function POST(request: NextRequest) {
   try {
@@ -76,36 +19,34 @@ export async function POST(request: NextRequest) {
 
     switch (action) {
       case 'test_connection':
-        if (!client) {
-          return NextResponse.json({ error: 'Weaviate client not initialized' }, { status: 500 });
-        }
-        const host = 'localhost:8081';
-        return NextResponse.json({ 
-          success: true, 
-          message: 'Client initialized', 
-          host: host,
-          clientExists: !!client 
-        });
-
+        return handleTestConnection();
       case 'create_schema':
         await createSchema();
         return NextResponse.json({ success: true, message: 'Schema created successfully' });
-
       case 'store':
-        const result = await storeData(className, data);
-        return NextResponse.json({ success: true, id: result.id });
-
+        return NextResponse.json({ success: true, id: (await storeData(className, data)).id });
       case 'search':
-        const searchResults = await searchData(className, data);
-        return NextResponse.json({ success: true, results: searchResults });
-
+        return NextResponse.json({ success: true, results: await searchData(className, data) });
+      case 'get_by_id':
+        return NextResponse.json({ success: true, object: await getObjectById(className, data.id) });
+      case 'update_by_id':
+        return NextResponse.json({
+          success: true,
+          result: await updateObjectById(className, data.id, data.updates)
+        });
+      case 'create_with_references':
+        return NextResponse.json({
+          success: true,
+          id: (await createObjectWithReferences(className, data.properties, data.references)).id
+        });
+      case 'query_by_reference':
+        return NextResponse.json({
+          success: true,
+          results: await queryByReference(className, data.refProperty, data.targetId)
+        });
       default:
-        return NextResponse.json(
-          { error: 'Invalid action' },
-          { status: 400 }
-        );
+        return NextResponse.json({ error: 'Invalid action' }, { status: 400 });
     }
-
   } catch (error) {
     console.error('Weaviate operation error:', error);
     return NextResponse.json(
@@ -115,71 +56,197 @@ export async function POST(request: NextRequest) {
   }
 }
 
-async function createSchema() {
-  try {
-    if (!client) {
-      throw new Error('Weaviate client not initialized');
-    }
-    
-    // Check if schema already exists
-    const existingSchema = await client.schema.getter().do();
-    const existingClasses = existingSchema.classes?.map((c: any) => c.class) || [];
+function ensureClient() {
+  if (!client) {
+    client = getWeaviateClient();
+  }
+  return client;
+}
 
-    for (const schemaClass of schemaClasses) {
-      if (!existingClasses.includes(schemaClass.class)) {
-        await client.schema.classCreator().withClass(schemaClass).do();
+function handleTestConnection() {
+  try {
+    ensureClient();
+    const weaviateHost = process.env.WEAVIATE_HOST || 'localhost:8081';
+    return NextResponse.json({
+      success: true,
+      message: 'Client initialized',
+      host: weaviateHost,
+      clientExists: true
+    });
+  } catch (error) {
+    console.error('Test connection error:', error);
+    return NextResponse.json(
+      { error: 'Weaviate client not initialized' },
+      { status: 500 }
+    );
+  }
+}
+
+async function createSchema() {
+  const weaviateClient = ensureClient();
+
+  const existingSchema = await weaviateClient.schema.getter().do();
+  const existingClasses = existingSchema.classes || [];
+  const existingClassNames = existingClasses.map((c: any) => c.class);
+
+  for (const schemaClass of schemaClasses) {
+    const existingClass = existingClasses.find(
+      (cls: any) => cls.class === schemaClass.class
+    );
+
+    if (!existingClassNames.includes(schemaClass.class)) {
+      const classWithoutRefs = {
+        class: schemaClass.class,
+        description: schemaClass.description,
+        properties: schemaClass.properties
+      };
+
+      await weaviateClient.schema.classCreator().withClass(classWithoutRefs).do();
+      console.log(`✅ Created class: ${schemaClass.class}`);
+
+      if (schemaClass.references?.length) {
+        for (const ref of schemaClass.references) {
+          try {
+            await weaviateClient.schema
+              .propertyCreator()
+              .withClassName(schemaClass.class)
+              .withProperty({
+                name: ref.name,
+                dataType: [ref.targetClass]
+              })
+              .do();
+            console.log(`✅ Added reference ${ref.name} -> ${ref.targetClass} to ${schemaClass.class}`);
+          } catch (refError) {
+            console.warn(
+              `⚠️ Failed to add reference ${ref.name} to ${schemaClass.class}:`,
+              refError
+            );
+          }
+        }
+      }
+    } else {
+      console.log(`ℹ️ Class ${schemaClass.class} already exists`);
+
+      const existingPropertyNames = new Set(
+        (existingClass?.properties || []).map((prop: any) => prop.name)
+      );
+
+      for (const property of schemaClass.properties) {
+        if (existingPropertyNames.has(property.name)) {
+          continue;
+        }
+
+        try {
+          await weaviateClient.schema
+            .propertyCreator()
+            .withClassName(schemaClass.class)
+            .withProperty(property)
+            .do();
+          existingPropertyNames.add(property.name);
+          console.log(
+            `✅ Added missing property ${property.name} to ${schemaClass.class}`
+          );
+        } catch (propertyError) {
+          console.warn(
+            `⚠️ Failed to add property ${property.name} to ${schemaClass.class}:`,
+            propertyError
+          );
+        }
+      }
+
+      if (schemaClass.references?.length) {
+        for (const ref of schemaClass.references) {
+          if (existingPropertyNames.has(ref.name)) {
+            continue;
+          }
+
+          try {
+            await weaviateClient.schema
+              .propertyCreator()
+              .withClassName(schemaClass.class)
+              .withProperty({
+                name: ref.name,
+                dataType: [ref.targetClass]
+              })
+              .do();
+            existingPropertyNames.add(ref.name);
+            console.log(
+              `✅ Added missing reference ${ref.name} -> ${ref.targetClass} on ${schemaClass.class}`
+            );
+          } catch (refError) {
+            console.warn(
+              `⚠️ Failed to add reference ${ref.name} to ${schemaClass.class}:`,
+              refError
+            );
+          }
+        }
       }
     }
-  } catch (error) {
-    console.error('Schema creation error:', error);
-    throw error;
   }
 }
 
 async function storeData(className: string, data: any) {
-  try {
-    if (!client) {
-      throw new Error('Weaviate client not initialized');
-    }
-    
-    const result = await client.data
-      .creator()
-      .withClassName(className)
-      .withProperties(data)
-      .do();
-
-    return result;
-  } catch (error) {
-    console.error('Data storage error:', error);
-    throw error;
-  }
+  const weaviateClient = ensureClient();
+  return weaviateClient.data.creator().withClassName(className).withProperties(data).do();
 }
 
 async function searchData(className: string, searchParams: any) {
-  try {
-    if (!client) {
-      throw new Error('Weaviate client not initialized');
-    }
-    
-    const { query, limit = 10, nearText } = searchParams;
+  const weaviateClient = ensureClient();
+  const params = searchParams || { query: '', limit: 10 };
+  const { query, limit = 10, nearText } = params;
 
-    let searchBuilder = client.graphql
-      .get()
-      .withClassName(className)
-      .withFields('_additional { id } ... on ' + className + ' { * }')
-      .withLimit(limit);
+  let searchBuilder = weaviateClient.graphql
+    .get()
+    .withClassName(className)
+    .withFields('_additional { id } ... on ' + className + ' { * }')
+    .withLimit(limit);
 
-    if (nearText) {
-      searchBuilder = searchBuilder.withNearText({
-        concepts: [nearText],
-        certainty: 0.7
-      });
-    }
-
-    const result = await searchBuilder.do();
-    return result.data.Get[className] || [];
-  } catch (error) {
-    console.error('Search error:', error);
-    throw error;
+  if (query) {
+    searchBuilder = searchBuilder.withNearText({
+      concepts: [query],
+      certainty: 0.7
+    });
   }
+
+  if (nearText) {
+    searchBuilder = searchBuilder.withNearText({
+      concepts: Array.isArray(nearText) ? nearText : [nearText],
+      certainty: 0.7
+    });
+  }
+
+  const result = await searchBuilder.do();
+  return result.data.Get[className] || [];
+}
+
+async function getObjectById(className: string, id: string) {
+  const weaviateClient = ensureClient();
+  return weaviateClient.data.getterById().withClassName(className).withId(id).do();
+}
+
+async function updateObjectById(className: string, id: string, updates: any) {
+  const weaviateClient = ensureClient();
+  return weaviateClient.data
+    .updater()
+    .withClassName(className)
+    .withId(id)
+    .withProperties(updates)
+    .do();
+}
+
+async function queryByReference(className: string, refProperty: string, targetId: string) {
+  const weaviateClient = ensureClient();
+
+  const result = await weaviateClient.graphql
+    .get()
+    .withClassName(className)
+    .withFields('_additional { id } ... on ' + className + ' { * }')
+    .withWhere({
+      path: [refProperty],
+      operator: 'Equal',
+      valueText: targetId
+    })
+    .do();
+
+  return result.data.Get[className] || [];
 }

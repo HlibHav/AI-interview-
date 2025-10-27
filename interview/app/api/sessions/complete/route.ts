@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
-import OpenAI from 'openai';
-
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+import {
+  upsertInterviewSession,
+  upsertInterviewChunks,
+  fetchInterviewSession
+} from '@/lib/weaviate/weaviate-session';
 
 // Global session storage declaration
 declare global {
@@ -17,263 +17,13 @@ if (typeof global.sessionsStore === 'undefined') {
 }
 sessions = global.sessionsStore;
 
-async function storeInWeaviate(className: string, data: any) {
-  try {
-    const weaviate = (await import('weaviate-ts-client')).default;
-    const weaviateHost = process.env.WEAVIATE_HOST || 'localhost:8081';
-    const isCloud = weaviateHost.includes('.weaviate.network') || weaviateHost.includes('.weaviate.cloud');
-    
-    const client = weaviate.client({
-      scheme: isCloud ? 'https' : 'http',
-      host: weaviateHost,
-      apiKey: process.env.WEAVIATE_API_KEY as any,
-    });
-
-    const result = await client.data
-      .creator()
-      .withClassName(className)
-      .withProperties(data)
-      .do();
-
-    console.log(`✅ Stored ${className} in Weaviate:`, result.id);
-    return result;
-  } catch (error) {
-    console.error('Weaviate storage error:', error);
-    return null;
-  }
-}
-
-async function updateSessionInWeaviate(sessionId: string, updates: any) {
-  try {
-    const weaviate = (await import('weaviate-ts-client')).default;
-    const weaviateHost = process.env.WEAVIATE_HOST || 'localhost:8081';
-    const isCloud = weaviateHost.includes('.weaviate.network') || weaviateHost.includes('.weaviate.cloud');
-    
-    const client = weaviate.client({
-      scheme: isCloud ? 'https' : 'http',
-      host: weaviateHost,
-      apiKey: process.env.WEAVIATE_API_KEY as any,
-    });
-
-    // First get the session to find its Weaviate ID
-    const getResult = await client.graphql
-      .get()
-      .withClassName('InterviewSession')
-      .withWhere({
-        path: ['sessionId'],
-        operator: 'Equal',
-        valueText: sessionId
-      })
-      .withFields('_additional { id }')
-      .do();
-
-    if (getResult.data.Get.InterviewSession.length === 0) {
-      throw new Error('Session not found in Weaviate');
-    }
-
-    const weaviateId = getResult.data.Get.InterviewSession[0]._additional.id;
-
-    // Prepare update data
-    const updateData: any = {
-      ...updates,
-      updatedAt: new Date().toISOString()
-    };
-
-    // Convert JSON objects to strings for storage
-    if (updateData.transcript && typeof updateData.transcript === 'object') {
-      updateData.transcript = JSON.stringify(updateData.transcript);
-    }
-    if (updateData.insights && typeof updateData.insights === 'object') {
-      updateData.insights = JSON.stringify(updateData.insights);
-    }
-    if (updateData.psychometricProfile && typeof updateData.psychometricProfile === 'object') {
-      updateData.psychometricProfile = JSON.stringify(updateData.psychometricProfile);
-    }
-
-    // Update the session
-    const result = await client.data
-      .updater()
-      .withClassName('InterviewSession')
-      .withId(weaviateId)
-      .withProperties(updateData)
-      .do();
-
-    console.log(`✅ Updated session ${sessionId} in Weaviate`);
-    return result;
-  } catch (error) {
-    console.error('Error updating session in Weaviate:', error);
-    throw error;
-  }
-}
-
-async function generateSessionSummary(transcript: any[], researchGoal: string) {
-  try {
-    const systemPrompt = `You are an expert qualitative researcher. Analyze this interview transcript and create a comprehensive summary with key insights.
-
-CRITICAL: The research goal is about "${researchGoal}". 
-Your summary MUST be directly relevant to this research goal.
-If the transcript discusses unrelated topics, note this discrepancy.
-
-Guidelines:
-- Summarize the main themes and patterns that emerged RELATED TO THE RESEARCH GOAL
-- Identify key insights and findings THAT ADDRESS THE RESEARCH GOAL
-- Note any surprising or unexpected responses
-- Highlight actionable recommendations
-- Keep the summary concise but comprehensive
-- Focus exclusively on insights that address: ${researchGoal}`;
-
-    const transcriptText = transcript
-      .filter(entry => entry.speaker === 'participant')
-      .map(entry => entry.text)
-      .join('\n\n');
-
-    const userPrompt = `Research Goal: ${researchGoal}
-
-Interview Transcript (Participant Responses Only):
-${transcriptText}
-
-IMPORTANT: Analyze this transcript ONLY in the context of the research goal: "${researchGoal}"
-If the discussion went off-topic, note that in your analysis.
-
-Generate a comprehensive session summary. Return a JSON object with:
-{
-  "summary": "Comprehensive summary focused on the research goal",
-  "keyThemes": ["theme1 related to research goal", "theme2", "theme3"],
-  "keyInsights": ["insight1 addressing research goal", "insight2", "insight3"],
-  "surprisingFindings": ["finding1", "finding2"],
-  "recommendations": ["recommendation1 for addressing research goal", "recommendation2"],
-  "researchValue": "Assessment of how well this interview addressed the research goal",
-  "topicRelevance": "high|medium|low - how relevant was the discussion to the research goal"
-}`;
-
-    const completion = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt }
-      ],
-      temperature: 0.3,
-      response_format: { type: "json_object" }
-    });
-
-    const response = completion.choices[0].message.content;
-    return JSON.parse(response || '{}');
-  } catch (error) {
-    console.error('Error generating session summary:', error);
-    return {
-      summary: "Unable to generate summary due to processing error",
-      keyThemes: [],
-      keyInsights: [],
-      surprisingFindings: [],
-      recommendations: [],
-      researchValue: "Unable to assess research value"
-    };
-  }
-}
-
-async function generatePsychometricProfile(transcript: any[], summaries: any[], researchGoal: string) {
-  try {
-    const systemPrompt = `You are a psychologist analyzing a research interview to estimate personality traits.
-
-Research Context: This interview was conducted to study: "${researchGoal}"
-Consider how the participant's responses relate to this research topic.
-
-Based on the complete conversation transcript, estimate the participant's Big Five personality traits on a 0-100 scale:
-- Openness: Curiosity, creativity, willingness to try new things
-- Conscientiousness: Organization, self-discipline, reliability
-- Extraversion: Sociability, assertiveness, emotional expressiveness
-- Agreeableness: Trust, altruism, kindness, cooperation
-- Neuroticism: Anxiety, moodiness, emotional instability
-
-Also estimate Enneagram type (1-9) if possible.
-
-Guidelines:
-- Draw from the actual statements made during the interview
-- Provide detailed reasoning for each personality trait score
-- Consider both explicit statements and implicit behavioral patterns
-- If there is insufficient information for a trait, state that the score is uncertain`;
-
-    const transcriptText = transcript
-      .map(entry => `${entry.speaker}: ${entry.text}`)
-      .join('\n\n');
-
-    const summariesText = summaries
-      .map(summary => summary.summary || summary)
-      .join('\n');
-
-    const userPrompt = `Complete Interview Transcript:
-${transcriptText}
-
-Session Summaries:
-${summariesText}
-
-Analyze the participant's personality and provide a comprehensive psychometric profile. Return a JSON object with:
-{
-  "bigFive": {
-    "openness": {
-      "score": number,
-      "explanation": "string"
-    },
-    "conscientiousness": {
-      "score": number,
-      "explanation": "string"
-    },
-    "extraversion": {
-      "score": number,
-      "explanation": "string"
-    },
-    "agreeableness": {
-      "score": number,
-      "explanation": "string"
-    },
-    "neuroticism": {
-      "score": number,
-      "explanation": "string"
-    }
-  },
-  "enneagram": {
-    "type": number,
-    "confidence": number,
-    "description": "brief explanation"
-  },
-  "overallProfile": "string",
-  "keyInsights": ["insight1", "insight2"]
-}`;
-
-    const completion = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt }
-      ],
-      temperature: 0.3,
-      response_format: { type: "json_object" }
-    });
-
-    const response = completion.choices[0].message.content;
-    return JSON.parse(response || '{}');
-  } catch (error) {
-    console.error('Error generating psychometric profile:', error);
-    return {
-      bigFive: {
-        openness: { score: 50, explanation: "Unable to assess due to processing error" },
-        conscientiousness: { score: 50, explanation: "Unable to assess due to processing error" },
-        extraversion: { score: 50, explanation: "Unable to assess due to processing error" },
-        agreeableness: { score: 50, explanation: "Unable to assess due to processing error" },
-        neuroticism: { score: 50, explanation: "Unable to assess due to processing error" }
-      },
-      enneagram: { type: 5, confidence: 0, description: "Unable to assess due to processing error" },
-      overallProfile: "Unable to generate profile due to processing error",
-      keyInsights: []
-    };
-  }
-}
-
 export async function POST(request: NextRequest) {
   try {
     const { sessionId, transcript, researchGoal } = await request.json();
 
-    console.log('🔄 [SESSION COMPLETE] Processing session:', sessionId);
+    console.log('🏁 [SESSION COMPLETE] Completing session:', sessionId);
+    console.log('🏁 [SESSION COMPLETE] Research goal:', researchGoal);
+    console.log('🏁 [SESSION COMPLETE] Transcript length:', transcript?.length || 0);
 
     if (!sessionId) {
       return NextResponse.json(
@@ -283,7 +33,18 @@ export async function POST(request: NextRequest) {
     }
 
     // Get session from memory store
-    const session = sessions.get(sessionId);
+    let session = sessions.get(sessionId);
+    if (!session) {
+      try {
+        session = await fetchInterviewSession(sessionId);
+        if (session) {
+          sessions.set(sessionId, session);
+        }
+      } catch (error) {
+        console.warn('⚠️ [SESSION COMPLETE] Failed to load session from Weaviate:', error);
+      }
+    }
+
     if (!session) {
       return NextResponse.json(
         { success: false, error: 'Session not found' },
@@ -291,98 +52,125 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Calculate session duration
-    const startTime = session.startTime ? new Date(session.startTime) : new Date();
-    const endTime = new Date();
-    const durationMinutes = Math.round((endTime.getTime() - startTime.getTime()) / (1000 * 60));
-
-    console.log('📊 [SESSION COMPLETE] Generating summary and insights...');
-
-    // Generate session summary using summarizer agent
-    const sessionSummary = await generateSessionSummary(transcript || [], researchGoal || session.researchGoal);
-
-    // Generate psychometric profile using psychometric agent
-    const psychometricProfile = await generatePsychometricProfile(transcript || [], session.summaries || [], researchGoal || session.researchGoal);
-
-    // Update session with completion data
-    const updatedSession = {
-      ...session,
-      status: 'completed',
-      endTime: endTime.toISOString(),
-      durationMinutes,
-      transcript: transcript || [],
-      insights: sessionSummary,
-      psychometricProfile,
-      summary: sessionSummary.summary,
-      keyFindings: sessionSummary.keyInsights || []
+    // PRESERVE original session data - don't let updates overwrite critical fields
+    const preservedSession = {
+      researchGoal: session.researchGoal, // Keep original research goal
+      targetAudience: session.targetAudience,
+      script: session.script,
+      createdBy: session.createdBy,
+      createdAt: session.createdAt,
+      sessionId: session.sessionId,
+      sessionUrl: session.sessionUrl,
+      roomName: session.roomName,
+      tags: session.tags,
+      isPublic: session.isPublic
     };
 
-    // Update in memory store
-    sessions.set(sessionId, updatedSession);
+    // Generate summary using OpenAI
+    let sessionSummary = null;
+    let psychometricProfile = null;
 
-    // Store/update in Weaviate
     try {
-      await updateSessionInWeaviate(sessionId, {
-        status: 'completed',
-        endTime: endTime.toISOString(),
-        durationMinutes,
-        transcript: transcript || [],
-        insights: sessionSummary,
-        psychometricProfile,
-        summary: sessionSummary.summary,
-        keyFindings: sessionSummary.keyInsights || []
+      // Call summarizer agent
+      const summarizerResponse = await fetch(`${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'}/api/agents/summarizer`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          transcript: transcript,
+          researchGoal: session.researchGoal, // Use original research goal
+          sessionUuid: sessionId
+        }),
       });
 
-      // Store individual interview chunks with cross-references
-      if (transcript && transcript.length > 0) {
-        for (const entry of transcript) {
-          if (entry.speaker === 'participant') {
-            const chunkData = {
-              sessionId,
-              researchGoal: researchGoal || session.researchGoal,  // NEW: Add research goal for filtering
-              researchGoalId: session.researchGoalId || researchGoal || session.researchGoal,  // NEW: Tenant ID
-              speaker: entry.speaker,
-              text: entry.text,
-              summary: sessionSummary.summary,
-              keywords: sessionSummary.keyThemes || [],
-              sentiment: 'neutral', // Could be enhanced with sentiment analysis
-              timestamp: entry.timestamp || new Date().toISOString(),
-              // NEW: Add cross-reference capability
-              relatedToSession: sessionId
-            };
-            
-            await storeInWeaviate('InterviewChunk', chunkData);
-          }
-        }
+      if (summarizerResponse.ok) {
+        sessionSummary = await summarizerResponse.json();
+        console.log('✅ [SESSION COMPLETE] Summary generated successfully');
+      } else {
+        console.error('❌ [SESSION COMPLETE] Failed to generate summary');
       }
 
-      // Store psychometric profile separately
-      const psychProfileData = {
+      // Call psychometric agent
+      const psychometricResponse = await fetch(`${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'}/api/agents/psychometric`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          fullTranscript: transcript,
+          researchGoal: session.researchGoal, // Use original research goal
+          summaries: sessionSummary ? [sessionSummary] : [],
+          sessionUuid: sessionId
+        }),
+      });
+
+      if (psychometricResponse.ok) {
+        psychometricProfile = await psychometricResponse.json();
+        console.log('✅ [SESSION COMPLETE] Psychometric profile generated successfully');
+      } else {
+        console.error('❌ [SESSION COMPLETE] Failed to generate psychometric profile');
+      }
+
+    } catch (error) {
+      console.error('❌ [SESSION COMPLETE] Error calling agents:', error);
+      // Continue without summary/profile - don't fail the entire completion
+    }
+
+    // Update session with completion data while preserving original fields
+    const updatedSession = {
+      ...preservedSession,
+      transcript: transcript,
+      summaries: sessionSummary ? [sessionSummary] : [],
+      psychometricProfile: psychometricProfile,
+      status: 'completed',
+      endTime: new Date().toISOString(),
+      durationMinutes: transcript ? Math.round(transcript.length * 2) : 0, // Estimate 2 minutes per exchange
+      summary: sessionSummary?.summary || '',
+      keyFindings: sessionSummary?.keyInsights || [],
+      updatedAt: new Date().toISOString()
+    };
+
+    // Store updated session in memory
+    sessions.set(sessionId, updatedSession);
+
+    console.log('✅ [SESSION COMPLETE] Session completed and stored in memory', {
+      sessionId,
+      transcriptEntries: Array.isArray(updatedSession.transcript) ? updatedSession.transcript.length : 0,
+      status: updatedSession.status
+    });
+    console.log('✅ [SESSION COMPLETE] Final research goal:', updatedSession.researchGoal);
+
+    // ALSO store in Weaviate
+    try {
+      const weaviateSessionId = await upsertInterviewSession(updatedSession);
+      console.log('✅ [SESSION COMPLETE] Upserted InterviewSession in Weaviate', {
         sessionId,
-        openness: psychometricProfile.bigFive?.openness?.score || 50,
-        conscientiousness: psychometricProfile.bigFive?.conscientiousness?.score || 50,
-        extraversion: psychometricProfile.bigFive?.extraversion?.score || 50,
-        agreeableness: psychometricProfile.bigFive?.agreeableness?.score || 50,
-        neuroticism: psychometricProfile.bigFive?.neuroticism?.score || 50,
-        enneagramType: psychometricProfile.enneagram?.type || 5,
-        explanation: psychometricProfile.overallProfile || '',
-        createdAt: new Date().toISOString()
-      };
+        weaviateSessionId
+      });
 
-      await storeInWeaviate('PsychProfile', psychProfileData);
+      if (Array.isArray(updatedSession.transcript) && updatedSession.transcript.length > 0) {
+        const chunksStored = await upsertInterviewChunks(sessionId, weaviateSessionId, updatedSession.transcript);
+        console.log('✅ [SESSION COMPLETE] Upserted transcript chunks', {
+          sessionId,
+          chunksStored
+        });
+      } else {
+        console.log('ℹ️ [SESSION COMPLETE] No transcript entries to store');
+      }
 
-      console.log('✅ [SESSION COMPLETE] Session completed and stored in Weaviate');
+      console.log('✅ [SESSION COMPLETE] Session stored in Weaviate successfully');
 
     } catch (weaviateError) {
-      console.error('⚠️ [SESSION COMPLETE] Weaviate storage failed:', weaviateError);
-      // Continue even if Weaviate storage fails
+      console.error('⚠️ [SESSION COMPLETE] Failed to store in Weaviate:', weaviateError);
+      // Continue - session is still stored in memory
     }
 
     return NextResponse.json({
       success: true,
       session: updatedSession,
       summary: sessionSummary,
-      psychometricProfile
+      psychometricProfile: psychometricProfile
     });
 
   } catch (error) {

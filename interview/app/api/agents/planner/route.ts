@@ -8,15 +8,40 @@ const openai = new OpenAI({
 // Helper function to store data in Weaviate
 async function storeInWeaviate(className: string, data: any) {
   try {
-    const response = await fetch('http://localhost:3000/api/weaviate', {
+    const response = await fetch(`${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'}/api/weaviate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'store', className, data })
     });
+    
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+    
     return await response.json();
   } catch (error) {
-    console.error('Weaviate storage error:', error);
-    return null;
+    console.error(`Weaviate storage error for ${className}:`, error);
+    throw error;  // Propagate error instead of silently returning null
+  }
+}
+
+// Helper function to call Weaviate API
+async function callWeaviateAPI(action: string, className: string, data: any) {
+  try {
+    const response = await fetch(`${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'}/api/weaviate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, className, data })
+    });
+    
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+    
+    return await response.json();
+  } catch (error) {
+    console.error(`Weaviate API call error for ${action}:`, error);
+    throw error;
   }
 }
 
@@ -31,22 +56,46 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { researchGoal, clarifications, brief } = await request.json();
+    const { researchGoal, clarifications, brief, researchGoalUuid, duration } = await request.json();
     
-    console.log('🔍 Planner request:', { researchGoal, clarificationsCount: clarifications?.length || 0, hasBrief: !!brief });
+    console.log('🔍 Planner request:', { researchGoal, clarificationsCount: clarifications?.length || 0, hasBrief: !!brief, duration });
 
-    const systemPrompt = `You are an expert qualitative researcher. Based on the research goal and clarifications, draft an interview plan. Write a short introduction describing who you are, why the study is important and how data will be used. Then propose 5–8 open‑ended questions covering the main themes. Provide optional follow‑ups for each question. Output a JSON object with \`introduction\`, \`questions\` (array) and \`followUps\` (map). Avoid leading questions and keep the total interview to about 15 minutes.
+    // Calculate number of questions based on duration
+    const durationMinutes = duration || 30;
+    let questionCount;
+    if (durationMinutes <= 5) {
+      questionCount = 3;
+    } else if (durationMinutes <= 10) {
+      questionCount = 4;
+    } else if (durationMinutes <= 15) {
+      questionCount = 5;
+    } else if (durationMinutes <= 20) {
+      questionCount = 6;
+    } else if (durationMinutes <= 30) {
+      questionCount = 7;
+    } else {
+      questionCount = 8;
+    }
+
+    console.log(`🔍 Duration: ${durationMinutes} minutes, Question Count: ${questionCount}`);
+
+    const systemPrompt = `You are an expert qualitative researcher. Based on the research goal and clarifications, draft an interview plan. Write a short introduction describing who you are, why the study is important and how data will be used. Then propose EXACTLY ${questionCount} open‑ended questions covering the main themes. Provide optional follow‑ups for each question. Output a JSON object with \`introduction\`, \`questions\` (array) and \`followUps\` (map). Avoid leading questions and keep the total interview to about ${durationMinutes} minutes.
+
+IMPORTANT: You must generate EXACTLY ${questionCount} questions, no more, no less.
 
 Guidelines:
 - Introductions should mention recording, privacy and the respondent's ability to pause at any time.
 - Questions should encourage storytelling ("Can you describe…?") rather than yes/no responses.
-- For each main question, suggest one or two deeper probes in case the participant mentions something intriguing.`;
+- For each main question, suggest one or two deeper probes in case the participant mentions something intriguing.
+- Generate exactly ${questionCount} questions to fit the ${durationMinutes}-minute timeframe.`;
 
     const userPrompt = `Research Goal: ${researchGoal}
 Clarifications: ${JSON.stringify(clarifications)}
 Brief: ${brief}
 
-Generate a comprehensive interview script. Return a JSON object with this structure:
+CRITICAL REQUIREMENT: Generate EXACTLY ${questionCount} questions for a ${durationMinutes}-minute interview.
+
+Return a JSON object with this structure:
 {
   "introduction": "string",
   "questions": [
@@ -59,7 +108,9 @@ Generate a comprehensive interview script. Return a JSON object with this struct
   "followUps": {
     "questionId": ["follow-up 1", "follow-up 2"]
   }
-}`;
+}
+
+REMEMBER: The questions array must contain EXACTLY ${questionCount} questions.`;
 
     console.log('🤖 Making OpenAI API call for interview script generation...');
     const completion = await openai.chat.completions.create({
@@ -90,25 +141,39 @@ Generate a comprehensive interview script. Return a JSON object with this struct
       throw new Error('Failed to parse interview script from AI response');
     }
 
-    // Store question plan in Weaviate (temporarily disabled due to configuration issues)
+    // Validate that we got the correct number of questions
+    const actualQuestionCount = script.questions?.length || 0;
+    console.log(`🔍 Expected ${questionCount} questions, got ${actualQuestionCount}`);
+    
+    if (actualQuestionCount !== questionCount) {
+      console.warn(`⚠️ AI generated ${actualQuestionCount} questions instead of ${questionCount}. This may be due to AI not following instructions precisely.`);
+    }
+
+    // Store question plan in Weaviate with cross-reference to research goal
+    let questionPlanUuid = null;
     try {
       const questionPlanData = {
-        researchGoalId: researchGoal,
+        researchGoalId: researchGoalUuid, // backup text field
         introduction: script.introduction,
         questions: script.questions?.map((q: any) => q.text) || [],
         followUps: JSON.stringify(script.followUps || {}),
         createdAt: new Date().toISOString()
       };
       
-      await storeInWeaviate('QuestionPlan', questionPlanData);
+      const result = await callWeaviateAPI('store', 'QuestionPlan', questionPlanData);
+      
+      questionPlanUuid = result.id;
+      console.log('✅ Created question plan with cross-reference to research goal');
     } catch (error) {
-      console.log('Weaviate storage skipped due to configuration issues:', error);
+      console.error('❌ Failed to store question plan:', error);
       // Continue without storing - this is not critical for script generation
     }
 
     return NextResponse.json({
       success: true,
-      script
+      script,
+      researchGoalUuid,
+      questionPlanUuid
     });
 
   } catch (error) {
