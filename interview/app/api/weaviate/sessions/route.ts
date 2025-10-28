@@ -123,7 +123,7 @@ async function createSession(sessionData: any) {
     }
 
     const sessionId = sessionData.sessionId || uuidv4();
-    const sessionUrl = `${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'}/respondent?session=${sessionId}`;
+    const sessionUrl = `http://localhost:3000/respondent?session=${sessionId}`;
     
     const sessionObject = {
       sessionId,

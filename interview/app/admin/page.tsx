@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -33,6 +33,9 @@ export default function AdminDashboard() {
   const [isGeneratingScript, setIsGeneratingScript] = useState(false);
   const [sessionUrl, setSessionUrl] = useState<string | null>(null);
   const [isCreatingSession, setIsCreatingSession] = useState(false);
+  const [sessionsData, setSessionsData] = useState<any[]>([]);
+  const [isLoadingSessions, setIsLoadingSessions] = useState(false);
+  const [sessionsError, setSessionsError] = useState<string | null>(null);
 
   const form = useForm<ResearchGoalForm>({
     resolver: zodResolver(researchGoalSchema),
@@ -43,6 +46,40 @@ export default function AdminDashboard() {
       sensitivity: "low",
     },
   });
+
+  const loadSessions = useCallback(async () => {
+    setIsLoadingSessions(true);
+    setSessionsError(null);
+
+    try {
+      const response = await fetch('/api/sessions', {
+        headers: { 'Accept': 'application/json' },
+        cache: 'no-store'
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to load sessions (status ${response.status})`);
+      }
+
+      const data = await response.json();
+      setSessionsData(Array.isArray(data.sessions) ? data.sessions : []);
+    } catch (loadError: any) {
+      console.error('Error loading sessions:', loadError);
+      setSessionsError(loadError?.message || 'Failed to load sessions.');
+    } finally {
+      setIsLoadingSessions(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadSessions().catch(() => null);
+  }, [loadSessions]);
+
+  useEffect(() => {
+    if (currentStep === "sessions") {
+      loadSessions().catch(() => null);
+    }
+  }, [currentStep, loadSessions]);
 
   const handleSubmitGoal = async (data: ResearchGoalForm) => {
     setIsGenerating(true);
@@ -618,11 +655,277 @@ export default function AdminDashboard() {
 
             {currentStep === "sessions" && (
               <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-8">
-                <h2 className="text-2xl font-bold text-gray-900 mb-6">Interview Sessions</h2>
-                <div className="text-center py-12">
-                  <Users className="h-12 w-12 text-gray-400 mx-auto mb-4" />
-                  <p className="text-gray-500">No sessions yet. Approve a script to start collecting responses.</p>
+                <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
+                  <div>
+                    <h2 className="text-2xl font-bold text-gray-900">Interview Sessions</h2>
+                    <p className="text-sm text-gray-500">
+                      Review completed interviews, their summaries, and psychometric insights.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span className="text-sm text-gray-500">
+                      Showing {sessionsData.length} session{sessionsData.length === 1 ? '' : 's'}
+                    </span>
+                    <button
+                      onClick={() => loadSessions().catch(() => null)}
+                      disabled={isLoadingSessions}
+                      className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {isLoadingSessions ? 'Refreshing…' : 'Refresh'}
+                    </button>
+                  </div>
                 </div>
+
+                {sessionsError && (
+                  <div className="mb-6 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                    {sessionsError}
+                  </div>
+                )}
+
+                {isLoadingSessions ? (
+                  <div className="flex flex-col items-center justify-center py-16 text-gray-500">
+                    <div className="h-10 w-10 border-4 border-blue-200 border-t-blue-500 rounded-full animate-spin mb-4" />
+                    Loading sessions…
+                  </div>
+                ) : sessionsData.length === 0 ? (
+                  <div className="text-center py-12">
+                    <Users className="h-12 w-12 text-gray-400 mx-auto mb-4" />
+                    <p className="text-gray-500">
+                      No sessions recorded yet. Approve a script to start collecting responses.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-6">
+                    {sessionsData
+                      .slice()
+                      .filter((session) => !!session)
+                      .sort(
+                        (a, b) =>
+                          new Date(b.updatedAt || b.createdAt || 0).getTime() -
+                          new Date(a.updatedAt || a.createdAt || 0).getTime()
+                      )
+                      .map((session) => {
+                        const status = session.status || 'created';
+                        const statusClasses =
+                          status === 'completed'
+                            ? 'bg-green-100 text-green-800 border border-green-200'
+                            : status === 'in_progress'
+                              ? 'bg-blue-100 text-blue-800 border border-blue-200'
+                              : 'bg-gray-100 text-gray-700 border border-gray-200';
+
+                        const transcriptEntries = Array.isArray(session.transcript)
+                          ? session.transcript
+                          : [];
+                        const transcriptCount = transcriptEntries.length;
+
+                        const summaryRecord =
+                          session.summaries?.[0] ||
+                          (session.summary
+                            ? { summary: session.summary, keyInsights: session.keyFindings }
+                            : null);
+
+                        const summaryText = summaryRecord?.summary || 'Summary not yet generated.';
+                        const keyInsights: string[] = Array.isArray(summaryRecord?.keyInsights)
+                          ? summaryRecord.keyInsights
+                          : Array.isArray(session.keyFindings)
+                            ? session.keyFindings
+                            : [];
+
+                        const keyThemes: string[] = Array.isArray(summaryRecord?.keyThemes)
+                          ? summaryRecord.keyThemes
+                          : [];
+
+                        const profile = session.psychometricProfile || null;
+                        const traitEntries = profile?.traits
+                          ? Object.entries(profile.traits)
+                          : [];
+
+                        const formatDateTime = (value?: string) => {
+                          if (!value) return '—';
+                          const date = new Date(value);
+                          if (Number.isNaN(date.getTime())) {
+                            return value;
+                          }
+                          return date.toLocaleString(undefined, {
+                            dateStyle: 'medium',
+                            timeStyle: 'short'
+                          });
+                        };
+
+                        return (
+                          <div
+                            key={session.sessionId}
+                            className="border border-gray-200 rounded-lg p-6 shadow-sm hover:shadow transition-shadow duration-150"
+                          >
+                            <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                              <div>
+                                <div className="flex items-center gap-3 mb-2">
+                                  <span className={`px-3 py-1 rounded-full text-xs font-semibold ${statusClasses}`}>
+                                    {status.replace(/_/g, ' ').toUpperCase()}
+                                  </span>
+                                  <span className="text-sm text-gray-500">
+                                    Updated {formatDateTime(session.updatedAt)}
+                                  </span>
+                                </div>
+                                <h3 className="text-xl font-semibold text-gray-900">
+                                  {session.researchGoal || 'Untitled research goal'}
+                                </h3>
+                                <p className="mt-1 text-sm text-gray-500">
+                                  Session ID: {session.sessionId}
+                                </p>
+                                {session.sessionUrl && (
+                                  <a
+                                    href={session.sessionUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="mt-2 inline-flex items-center text-sm text-blue-600 hover:text-blue-700"
+                                  >
+                                    Open respondent link
+                                  </a>
+                                )}
+                              </div>
+                              <div className="flex flex-col gap-1 items-start text-sm text-gray-600">
+                                <p>
+                                  <span className="font-medium text-gray-700">Target audience:</span>{' '}
+                                  {session.targetAudience || '—'}
+                                </p>
+                                <p>
+                                  <span className="font-medium text-gray-700">Duration:</span>{' '}
+                                  {session.durationMinutes
+                                    ? `${session.durationMinutes} min`
+                                    : `${session.duration || 30} min planned`}
+                                </p>
+                                <p>
+                                  <span className="font-medium text-gray-700">Transcript entries:</span>{' '}
+                                  {transcriptCount}
+                                </p>
+                                <p>
+                                  <span className="font-medium text-gray-700">Completed:</span>{' '}
+                                  {formatDateTime(session.endTime)}
+                                </p>
+                              </div>
+                            </div>
+
+                            <div className="mt-6 grid gap-6 lg:grid-cols-2">
+                              <div>
+                                <h4 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-2">
+                                  Summary
+                                </h4>
+                                <p className="text-gray-700 leading-relaxed">{summaryText}</p>
+
+                                {(keyThemes.length > 0 || keyInsights.length > 0) && (
+                                  <div className="mt-4 space-y-3">
+                                    {keyThemes.length > 0 && (
+                                      <div>
+                                        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">
+                                          Key Themes
+                                        </p>
+                                        <div className="flex flex-wrap gap-2">
+                                          {keyThemes.map((theme: string) => (
+                                            <span
+                                              key={theme}
+                                              className="inline-flex items-center px-3 py-1 rounded-full bg-gray-100 text-gray-700 text-xs font-medium"
+                                            >
+                                              {theme}
+                                            </span>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    )}
+
+                                    {keyInsights.length > 0 && (
+                                      <div>
+                                        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">
+                                          Key Insights
+                                        </p>
+                                        <ul className="list-disc list-inside text-sm text-gray-700 space-y-1">
+                                          {keyInsights.map((insight: string, idx: number) => (
+                                            <li key={`${session.sessionId}-insight-${idx}`}>{insight}</li>
+                                          ))}
+                                        </ul>
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+
+                              <div>
+                                <h4 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-2">
+                                  Psychometric Profile
+                                </h4>
+                                {profile && traitEntries.length > 0 ? (
+                                  <div className="space-y-3">
+                                    <div className="grid gap-3 sm:grid-cols-2">
+                                      {traitEntries.map(([trait, info]: [string, any]) => {
+                                        const rawScore = Number(info?.score ?? info ?? 0);
+                                        const score = Number.isFinite(rawScore) ? rawScore : 0;
+                                        const normalizedScore = Math.min(Math.max(score, 0), 100);
+                                        const explanation = info?.explanation || '';
+                                        return (
+                                          <div
+                                            key={`${session.sessionId}-${trait}`}
+                                            className="border border-gray-200 rounded-md p-3"
+                                          >
+                                            <div className="flex items-center justify-between mb-1">
+                                              <span className="text-sm font-medium text-gray-700 capitalize">
+                                                {trait}
+                                              </span>
+                                              <span className="text-sm font-semibold text-gray-900">
+                                                {Number.isFinite(score) ? Math.round(score) : '—'}
+                                              </span>
+                                            </div>
+                                            <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                                              <div
+                                                className="h-full bg-blue-500 rounded-full transition-all"
+                                                style={{
+                                                  width: `${normalizedScore}%`
+                                                }}
+                                              />
+                                            </div>
+                                            {explanation && (
+                                              <p className="mt-2 text-xs text-gray-500 leading-snug">
+                                                {explanation}
+                                              </p>
+                                            )}
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                    {profile?.overallProfile && (
+                                      <div className="border border-blue-100 bg-blue-50 text-blue-900 rounded-md p-3 text-sm">
+                                        <p className="font-semibold text-blue-800 mb-1">
+                                          Overall Profile
+                                        </p>
+                                        <p className="leading-relaxed">{profile.overallProfile}</p>
+                                      </div>
+                                    )}
+                                    {profile?.keyInsights && Array.isArray(profile.keyInsights) && profile.keyInsights.length > 0 && (
+                                      <div>
+                                        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">
+                                          Personality Insights
+                                        </p>
+                                        <ul className="list-disc list-inside text-sm text-gray-700 space-y-1">
+                                          {profile.keyInsights.map((insight: string, idx: number) => (
+                                            <li key={`${session.sessionId}-profile-insight-${idx}`}>
+                                              {insight}
+                                            </li>
+                                          ))}
+                                        </ul>
+                                      </div>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <div className="border border-dashed border-gray-200 rounded-md p-4 text-sm text-gray-500">
+                                    Psychometric analysis is not yet available for this session.
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                  </div>
+                )}
               </div>
             )}
 

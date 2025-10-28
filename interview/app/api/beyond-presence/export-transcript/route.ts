@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import {
   upsertInterviewSession,
   upsertInterviewChunks,
+  upsertTranscriptDocument,
   fetchInterviewSession
 } from '@/lib/weaviate/weaviate-session';
 
@@ -213,7 +214,10 @@ export async function POST(request: NextRequest) {
     });
 
     let weaviateSessionId: string | null = null;
+    let transcriptDocumentId: string | null = null;
     let chunksStored = 0;
+    let autoCompletionTriggered = false;
+    let autoCompletionResponse: any = null;
 
     try {
       weaviateSessionId = await upsertInterviewSession(updatedSession);
@@ -223,6 +227,12 @@ export async function POST(request: NextRequest) {
       });
 
       if (weaviateSessionId) {
+        transcriptDocumentId = await upsertTranscriptDocument(
+          sessionId,
+          weaviateSessionId,
+          transcript
+        );
+
         chunksStored = await upsertInterviewChunks(sessionId, weaviateSessionId, transcript);
         console.log('✅ [BEY EXPORT] Upserted transcript chunks', {
           sessionId,
@@ -234,14 +244,86 @@ export async function POST(request: NextRequest) {
       console.error('⚠️ Failed to persist transcript to Weaviate:', error);
     }
 
+    if (transcript.length > 0) {
+      const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000';
+      try {
+        console.log('🧠 [BEY EXPORT] Triggering automatic session completion via /api/sessions/real-complete', {
+          sessionId,
+          transcriptEntries: transcript.length
+        });
+        const realCompleteResponse = await fetch(`${baseUrl}/api/sessions/real-complete`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionId })
+        });
+
+        if (realCompleteResponse.ok) {
+          autoCompletionTriggered = true;
+          autoCompletionResponse = await realCompleteResponse.json();
+          console.log('✅ [BEY EXPORT] Automatic session completion succeeded', {
+            sessionId
+          });
+        } else {
+          const errorBody = await realCompleteResponse.text();
+          console.error('❌ [BEY EXPORT] Automatic session completion failed', {
+            sessionId,
+            status: realCompleteResponse.status,
+            errorBody
+          });
+        }
+      } catch (completionError) {
+        console.error('❌ [BEY EXPORT] Error triggering automatic session completion:', completionError);
+      }
+
+      if (!autoCompletionTriggered) {
+        try {
+          console.log('🧠 [BEY EXPORT] Fallback: calling /api/sessions/complete directly', {
+            sessionId,
+            transcriptEntries: transcript.length
+          });
+          const completionResponse = await fetch(`${baseUrl}/api/sessions/complete`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              sessionId,
+              transcript,
+              researchGoal: updatedSession.researchGoal
+            })
+          });
+
+          if (completionResponse.ok) {
+            autoCompletionTriggered = true;
+            autoCompletionResponse = await completionResponse.json();
+            console.log('✅ [BEY EXPORT] Session completion succeeded via fallback', {
+              sessionId
+            });
+          } else {
+            const errorBody = await completionResponse.text();
+            console.error('❌ [BEY EXPORT] Fallback session completion failed', {
+              sessionId,
+              status: completionResponse.status,
+              errorBody
+            });
+          }
+        } catch (fallbackError) {
+          console.error('❌ [BEY EXPORT] Error during fallback session completion:', fallbackError);
+        }
+      }
+    }
+
     return NextResponse.json({
       success: true,
       transcriptCount: transcript.length,
+      transcriptDocumentId,
       chunksStored,
       weaviateSessionId,
       beyondPresenceSessionId: resolvedBeyondPresenceSessionId,
       resolution: buildResolutionSummary(callResolution, resolvedBeyondPresenceSessionId),
-      session: updatedSession
+      session: updatedSession,
+      autoCompletion: {
+        triggered: autoCompletionTriggered,
+        response: autoCompletionResponse
+      }
     });
   } catch (error) {
     console.error('❌ Error exporting Beyond Presence transcript:', error);

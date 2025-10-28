@@ -1,10 +1,12 @@
 import { v5 as uuidv5 } from 'uuid';
 import {
   createObjectWithReferences,
+  ensureSchemaClass,
   ensureSchemaReference,
   getWeaviateClient,
   updateObjectWithReferences
 } from './weaviate-helpers';
+import { generateEmbeddingForChunk } from '@/lib/embeddings/transcript';
 
 export type TranscriptChunkInput = {
   speaker: string;
@@ -13,7 +15,157 @@ export type TranscriptChunkInput = {
   summary?: string;
   keywords?: string[];
   sentiment?: string;
+  turnIndex?: number;
+  embedding?: number[];
 };
+
+export type FullTranscriptEntry = {
+  speaker: string;
+  text: string;
+  timestamp?: string;
+  raw?: any;
+};
+
+export type TranscriptDocumentRecord = {
+  sessionId: string;
+  weaviateId: string | null;
+  text: string;
+  entries: FullTranscriptEntry[];
+  messageCount: number;
+  wordCount: number;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type PsychometricProfileInput = {
+  openness: number;
+  conscientiousness: number;
+  extraversion: number;
+  agreeableness: number;
+  neuroticism: number;
+  enneagramType?: number;
+  explanation: string;
+  keyInsights?: string[];
+  overallProfile?: string;
+  createdAt?: string;
+};
+
+function normalizeTranscriptEntry(entry: any): FullTranscriptEntry | null {
+  if (!entry) {
+    return null;
+  }
+
+  const raw = entry.raw ?? entry;
+  const text =
+    typeof entry.text === 'string'
+      ? entry.text
+      : typeof entry.message === 'string'
+        ? entry.message
+        : typeof raw?.message === 'string'
+          ? raw.message
+          : typeof raw?.text === 'string'
+            ? raw.text
+            : '';
+
+  if (!text || !text.trim()) {
+    return null;
+  }
+
+  const speaker =
+    entry.speaker ||
+    entry.role ||
+    entry.actor ||
+    (raw?.sender === 'ai' ? 'agent' : raw?.sender === 'user' ? 'participant' : raw?.sender) ||
+    (raw?.type === 'agent_message' ? 'agent' : 'participant') ||
+    'unknown';
+
+  const timestamp =
+    entry.timestamp ||
+    entry.time ||
+    entry.sent_at ||
+    raw?.sent_at ||
+    raw?.timestamp ||
+    raw?.createdAt ||
+    raw?.created_at ||
+    undefined;
+
+  return {
+    speaker,
+    text: text.trim(),
+    timestamp,
+    raw
+  };
+}
+
+export function normalizeTranscriptEntries(transcript: any): FullTranscriptEntry[] {
+  if (!transcript) {
+    return [];
+  }
+
+  if (typeof transcript === 'string') {
+    const trimmed = transcript.trim();
+    if (!trimmed) {
+      return [];
+    }
+
+    return [
+      {
+        speaker: 'unknown',
+        text: trimmed
+      }
+    ];
+  }
+
+  if (!Array.isArray(transcript)) {
+    return normalizeTranscriptEntries([transcript]);
+  }
+
+  const entries: FullTranscriptEntry[] = [];
+  transcript.forEach((item) => {
+    const normalized = normalizeTranscriptEntry(item);
+    if (normalized) {
+      entries.push(normalized);
+    }
+  });
+
+  return entries;
+}
+
+export function renderTranscriptText(entries: FullTranscriptEntry[]): string {
+  return entries
+    .map((entry) => {
+      const timestamp = entry.timestamp ? `[${entry.timestamp}] ` : '';
+      const speaker = entry.speaker || 'unknown';
+      const text = entry.text || '';
+      return `${timestamp}${speaker}: ${text}`.trim();
+    })
+    .filter((line) => line.length > 0)
+    .join('\n');
+}
+
+function countWords(text: string): number {
+  if (!text) {
+    return 0;
+  }
+  return text
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean).length;
+}
+
+function parseTranscriptJson(json: string | null | undefined): FullTranscriptEntry[] {
+  if (!json || typeof json !== 'string') {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(json);
+    return normalizeTranscriptEntries(parsed);
+  } catch (error) {
+    console.warn('[WEAVIATE] Failed to parse transcript JSON from TranscriptDocument:', error);
+    return [];
+  }
+}
 
 export async function upsertInterviewSession(session: any) {
   const weaviateClient = getWeaviateClient();
@@ -107,7 +259,7 @@ export async function upsertInterviewChunks(
     weaviateSessionId
   });
 
-  for (const entry of entries) {
+  for (const [index, entry] of entries.entries()) {
     const chunkId = uuidv5(
       `${sessionId}:${entry.timestamp}:${entry.speaker}:${entry.text}`,
       uuidv5.URL
@@ -120,7 +272,24 @@ export async function upsertInterviewChunks(
       summary: entry.summary || '',
       keywords: entry.keywords || [],
       sentiment: entry.sentiment || 'neutral',
-      timestamp: entry.timestamp
+      timestamp: entry.timestamp,
+      turnIndex:
+        typeof entry.turnIndex === 'number' && !Number.isNaN(entry.turnIndex)
+          ? entry.turnIndex
+          : index
+    };
+
+    const embedding =
+      entry.embedding ??
+      (await generateEmbeddingForChunk({
+        speaker: entry.speaker,
+        text: entry.text,
+        summary: entry.summary,
+        keywords: entry.keywords
+      }));
+    const createOptions = {
+      id: chunkId,
+      vector: embedding ?? undefined
     };
 
     try {
@@ -128,7 +297,7 @@ export async function upsertInterviewChunks(
         'TranscriptChunk',
         chunkPayload,
         { session: weaviateSessionId },
-        { id: chunkId }
+        createOptions
       );
       stored += 1;
       console.log('✅ [WEAVIATE] Created TranscriptChunk', {
@@ -157,7 +326,7 @@ export async function upsertInterviewChunks(
             'TranscriptChunk',
             chunkPayload,
             { session: weaviateSessionId },
-            { id: chunkId }
+            createOptions
           );
           stored += 1;
           console.log('✅ [WEAVIATE] Created TranscriptChunk after schema update', {
@@ -183,7 +352,8 @@ export async function upsertInterviewChunks(
           'TranscriptChunk',
           chunkId,
           chunkPayload,
-          { session: weaviateSessionId }
+          { session: weaviateSessionId },
+          embedding ? { vector: embedding } : undefined
         );
         stored += 1;
         console.log('✅ [WEAVIATE] Updated TranscriptChunk', {
@@ -198,7 +368,9 @@ export async function upsertInterviewChunks(
 
   if (stored > 0) {
     try {
-      const count = await backfillTranscriptChunkReferences(sessionId, weaviateSessionId);
+      const count = await backfillTranscriptChunkReferences(sessionId, weaviateSessionId, {
+        forceEmbedding: false
+      });
       console.log('✅ [WEAVIATE] Backfilled transcript references', {
         sessionId,
         updatedChunks: count
@@ -210,6 +382,377 @@ export async function upsertInterviewChunks(
 
   return stored;
 }
+
+export async function upsertTranscriptDocument(
+  sessionId: string,
+  weaviateSessionId: string,
+  entries: FullTranscriptEntry[]
+) {
+  const weaviateClient = getWeaviateClient();
+  const documentId = uuidv5(`${sessionId}:full-transcript`, uuidv5.URL);
+  const nowIso = new Date().toISOString();
+
+  const normalizedEntries = normalizeTranscriptEntries(entries);
+  const plainText = renderTranscriptText(normalizedEntries);
+  const wordCount = countWords(plainText);
+
+  const documentPayload = {
+    sessionId,
+    text: plainText,
+    json: JSON.stringify(normalizedEntries),
+    messageCount: normalizedEntries.length,
+    wordCount,
+    createdAt: nowIso,
+    updatedAt: nowIso
+  };
+
+  const updatePayload = {
+    sessionId,
+    text: plainText,
+    json: documentPayload.json,
+    messageCount: documentPayload.messageCount,
+    wordCount: documentPayload.wordCount,
+    updatedAt: nowIso
+  };
+
+  const reference = { session: weaviateSessionId };
+
+  const attemptCreate = async () => {
+    await createObjectWithReferences(
+      'TranscriptDocument',
+      documentPayload,
+      reference,
+      { id: documentId }
+    );
+  };
+
+  try {
+    await attemptCreate();
+    console.log('✅ [WEAVIATE] Created TranscriptDocument', {
+      sessionId,
+      documentId
+    });
+    return documentId;
+  } catch (error: any) {
+    const message = error?.message || '';
+
+    if (message.includes("has no class with name 'TranscriptDocument'")) {
+      try {
+        await ensureSchemaClass('TranscriptDocument');
+        await attemptCreate();
+        console.log('✅ [WEAVIATE] Created TranscriptDocument after ensuring class', {
+          sessionId,
+          documentId
+        });
+        return documentId;
+      } catch (classError) {
+        console.warn(
+          '⚠️ Failed to create TranscriptDocument after ensuring class:',
+          classError
+        );
+      }
+    }
+
+    const missingSessionReference =
+      message.includes("no such prop with name 'session'") ||
+      message.includes('no such prop with name "session"');
+
+    if (missingSessionReference) {
+      try {
+        await ensureSchemaReference('TranscriptDocument', {
+          name: 'session',
+          targetClass: 'InterviewSession'
+        });
+        await attemptCreate();
+        console.log('✅ [WEAVIATE] Created TranscriptDocument after schema update', {
+          sessionId,
+          documentId
+        });
+        return documentId;
+      } catch (schemaError) {
+        console.warn(
+          '⚠️ Failed to create TranscriptDocument after ensuring reference:',
+          schemaError
+        );
+      }
+    }
+
+    if (!message.includes('already exists')) {
+      console.warn('⚠️ Failed to create TranscriptDocument, attempting update:', error);
+    }
+  }
+
+  try {
+    await updateObjectWithReferences(
+      'TranscriptDocument',
+      documentId,
+      updatePayload,
+      reference
+    );
+    console.log('✅ [WEAVIATE] Updated TranscriptDocument', {
+      sessionId,
+      documentId
+    });
+    return documentId;
+  } catch (updateError) {
+    console.error('❌ Failed to upsert TranscriptDocument:', updateError);
+    return null;
+  }
+}
+
+export async function fetchTranscriptDocument(
+  sessionId: string
+): Promise<TranscriptDocumentRecord | null> {
+  const weaviateClient = getWeaviateClient();
+
+  const result = await weaviateClient.graphql
+    .get()
+    .withClassName('TranscriptDocument')
+    .withFields(`
+      text
+      json
+      messageCount
+      wordCount
+      createdAt
+      updatedAt
+      _additional { id }
+    `)
+    .withWhere({
+      path: ['sessionId'],
+      operator: 'Equal',
+      valueText: sessionId
+    })
+    .withLimit(1)
+    .do();
+
+  const document = result.data?.Get?.TranscriptDocument?.[0];
+  if (!document) {
+    return null;
+  }
+
+  let entries = parseTranscriptJson(document.json);
+  const text = typeof document.text === 'string' ? document.text : renderTranscriptText(entries);
+
+  if (entries.length === 0 && text) {
+    entries = normalizeTranscriptEntries([{ text }]);
+  }
+
+  const messageCount =
+    typeof document.messageCount === 'number' ? document.messageCount : entries.length;
+
+  const wordCount =
+    typeof document.wordCount === 'number' ? document.wordCount : countWords(text);
+
+  return {
+    sessionId,
+    weaviateId: document?._additional?.id || null,
+    text,
+    entries,
+    messageCount,
+    wordCount,
+    createdAt: document.createdAt,
+    updatedAt: document.updatedAt
+  };
+}
+
+export async function resolveWeaviateSessionId(sessionId: string): Promise<string | null> {
+  const weaviateClient = getWeaviateClient();
+
+  const result = await weaviateClient.graphql
+    .get()
+    .withClassName('InterviewSession')
+    .withFields('_additional { id }')
+    .withWhere({
+      path: ['sessionId'],
+      operator: 'Equal',
+      valueText: sessionId
+    })
+    .withLimit(1)
+    .do();
+
+  return result.data?.Get?.InterviewSession?.[0]?._additional?.id || null;
+}
+
+export async function upsertPsychometricProfile(
+  sessionId: string,
+  profile: PsychometricProfileInput,
+  providedWeaviateSessionId?: string | null
+) {
+  const weaviateClient = getWeaviateClient();
+  const profileId = uuidv5(`${sessionId}:psychometric`, uuidv5.URL);
+  const timestamp = profile.createdAt || new Date().toISOString();
+
+  console.log('🧠 [WEAVIATE] Starting upsertPsychometricProfile:', {
+    sessionId,
+    profileId,
+    providedWeaviateSessionId,
+    profileScores: {
+      openness: profile.openness,
+      conscientiousness: profile.conscientiousness,
+      extraversion: profile.extraversion,
+      agreeableness: profile.agreeableness,
+      neuroticism: profile.neuroticism,
+      enneagramType: profile.enneagramType
+    }
+  });
+
+  const payload = {
+    sessionId,
+    openness: profile.openness ?? 0,
+    conscientiousness: profile.conscientiousness ?? 0,
+    extraversion: profile.extraversion ?? 0,
+    agreeableness: profile.agreeableness ?? 0,
+    neuroticism: profile.neuroticism ?? 0,
+    enneagramType: profile.enneagramType ?? 0,
+    reasoning: profile.explanation,
+    createdAt: timestamp
+  };
+
+  const ensureReference = async () => {
+    try {
+      console.log('🔗 [WEAVIATE] Ensuring PsychometricProfile.session reference...');
+      await ensureSchemaReference('PsychometricProfile', {
+        name: 'session',
+        targetClass: 'InterviewSession'
+      });
+      console.log('✅ [WEAVIATE] PsychometricProfile.session reference ensured');
+    } catch (error) {
+      console.error('❌ [WEAVIATE] Failed ensuring PsychometricProfile.session reference:', error);
+      throw error;
+    }
+  };
+
+  const resolveReferenceId = async () => {
+    const resolved = providedWeaviateSessionId || (await resolveWeaviateSessionId(sessionId));
+    console.log('🔍 [WEAVIATE] Resolved reference ID:', {
+      sessionId,
+      providedWeaviateSessionId,
+      resolved
+    });
+    return resolved;
+  };
+
+  const attemptCreate = async (referenceId: string | null) => {
+    console.log('📝 [WEAVIATE] Attempting to create PsychometricProfile:', {
+      profileId,
+      referenceId,
+      payloadKeys: Object.keys(payload)
+    });
+    
+    await createObjectWithReferences(
+      'PsychometricProfile',
+      payload,
+      referenceId ? { session: referenceId } : undefined,
+      { id: profileId }
+    );
+  };
+
+  let referenceId = await resolveReferenceId();
+
+  try {
+    await attemptCreate(referenceId);
+    console.log('✅ [WEAVIATE] Created PsychometricProfile', {
+      sessionId,
+      profileId,
+      referenceId
+    });
+    return profileId;
+  } catch (error: any) {
+    const message = error?.message || '';
+    console.warn('⚠️ [WEAVIATE] Initial PsychometricProfile creation failed:', {
+      sessionId,
+      profileId,
+      error: message,
+      referenceId
+    });
+
+    if (message.includes("has no class with name 'PsychometricProfile'")) {
+      try {
+        console.log('🏗️ [WEAVIATE] Ensuring PsychometricProfile class exists...');
+        await ensureSchemaClass('PsychometricProfile');
+        referenceId = await resolveReferenceId();
+        await attemptCreate(referenceId);
+        console.log('✅ [WEAVIATE] Created PsychometricProfile after ensuring class', {
+          sessionId,
+          profileId,
+          referenceId
+        });
+        return profileId;
+      } catch (classError: any) {
+        console.error('❌ [WEAVIATE] Failed to create PsychometricProfile after ensuring class:', {
+          sessionId,
+          profileId,
+          error: classError?.message || classError,
+          referenceId
+        });
+        throw classError;
+      }
+    }
+
+    if (message.includes("no such prop with name 'session'")) {
+      try {
+        await ensureReference();
+        referenceId = await resolveReferenceId();
+        await attemptCreate(referenceId);
+        console.log('✅ [WEAVIATE] Created PsychometricProfile after ensuring reference', {
+          sessionId,
+          profileId,
+          referenceId
+        });
+        return profileId;
+      } catch (referenceError: any) {
+        console.error('❌ [WEAVIATE] Failed to create PsychometricProfile after ensuring reference:', {
+          sessionId,
+          profileId,
+          error: referenceError?.message || referenceError,
+          referenceId
+        });
+        throw referenceError;
+      }
+    }
+
+    if (!message.includes('already exists')) {
+      console.warn('⚠️ [WEAVIATE] Failed to create PsychometricProfile, attempting update:', {
+        sessionId,
+        profileId,
+        error: message,
+        referenceId
+      });
+    }
+  }
+
+  referenceId = referenceId || (await resolveReferenceId());
+
+  try {
+    console.log('🔄 [WEAVIATE] Attempting to update PsychometricProfile:', {
+      sessionId,
+      profileId,
+      referenceId
+    });
+    
+    await updateObjectWithReferences(
+      'PsychometricProfile',
+      profileId,
+      payload,
+      referenceId ? { session: referenceId } : undefined
+    );
+    console.log('✅ [WEAVIATE] Updated PsychometricProfile', {
+      sessionId,
+      profileId,
+      referenceId
+    });
+    return profileId;
+  } catch (updateError: any) {
+    console.error('❌ [WEAVIATE] Failed to upsert PsychometricProfile:', {
+      sessionId,
+      profileId,
+      error: updateError?.message || updateError,
+      referenceId
+    });
+    throw updateError;
+  }
+}
+
 
 function parseJson(value: any) {
   if (typeof value !== 'string') {
@@ -237,6 +780,7 @@ export function parseInterviewSession(raw: any) {
 
   return {
     ...raw,
+    weaviateId: raw?._additional?.id || null,
     script: parseJson(raw.script) ?? raw.script ?? null,
     transcript: parseJson(raw.transcript) ?? [],
     summaries: Array.isArray(parsedSummaries) ? parsedSummaries : [],
@@ -259,6 +803,7 @@ export async function fetchInterviewSession(sessionId: string) {
     .get()
     .withClassName('InterviewSession')
     .withFields(`
+      _additional { id }
       sessionId
       sessionUrl
       researchGoal
@@ -276,7 +821,6 @@ export async function fetchInterviewSession(sessionId: string) {
       durationMinutes
       script
       transcript
-      summaries
       insights
       psychometricProfile
       keyFindings
@@ -303,9 +847,10 @@ export async function fetchInterviewSession(sessionId: string) {
   return parseInterviewSession(session);
 }
 
-async function backfillTranscriptChunkReferences(
+export async function backfillTranscriptChunkReferences(
   sessionId: string,
-  weaviateSessionId: string
+  weaviateSessionId: string,
+  options?: { forceEmbedding?: boolean }
 ) {
   const weaviateClient = getWeaviateClient();
   const limit = 100;
@@ -317,7 +862,7 @@ async function backfillTranscriptChunkReferences(
       .get()
       .withClassName('TranscriptChunk')
       .withFields(`
-        _additional { id }
+        _additional { id vector }
         sessionId
         speaker
         text
@@ -325,6 +870,7 @@ async function backfillTranscriptChunkReferences(
         keywords
         sentiment
         timestamp
+        turnIndex
       `)
       .withWhere({
         path: ['sessionId'],
@@ -340,11 +886,16 @@ async function backfillTranscriptChunkReferences(
       break;
     }
 
-    for (const chunk of chunks) {
+    for (const [chunkIndex, chunk] of chunks.entries()) {
       const chunkId = chunk?._additional?.id;
       if (!chunkId) {
         continue;
       }
+
+      const turnIndex =
+        typeof chunk.turnIndex === 'number' && !Number.isNaN(chunk.turnIndex)
+          ? chunk.turnIndex
+          : offset + chunkIndex;
 
       const payload = {
         sessionId: chunk.sessionId || sessionId,
@@ -353,14 +904,26 @@ async function backfillTranscriptChunkReferences(
         summary: chunk.summary || '',
         keywords: Array.isArray(chunk.keywords) ? chunk.keywords : [],
         sentiment: chunk.sentiment || 'neutral',
-        timestamp: chunk.timestamp
+        timestamp: chunk.timestamp,
+        turnIndex
       };
+
+      const needsEmbedding = options?.forceEmbedding || !chunk?._additional?.vector;
+      const embedding = needsEmbedding
+        ? await generateEmbeddingForChunk({
+            speaker: payload.speaker,
+            text: payload.text,
+            summary: payload.summary,
+            keywords: payload.keywords
+          })
+        : undefined;
 
       await updateObjectWithReferences(
         'TranscriptChunk',
         chunkId,
         payload,
-        { session: weaviateSessionId }
+        { session: weaviateSessionId },
+        embedding ? { vector: embedding } : undefined
       );
       totalUpdated += 1;
     }

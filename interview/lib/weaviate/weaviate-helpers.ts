@@ -4,6 +4,7 @@ import {
   extractObjectId,
   ReferenceValue
 } from './weaviate-reference-utils';
+import { schemaClasses } from './weaviate-schema';
 
 // Initialize Weaviate client once per runtime
 let client: any;
@@ -81,6 +82,75 @@ export async function ensureSchemaReference(
     name: reference.name,
     dataType: [reference.targetClass]
   });
+}
+
+export async function ensureSchemaClass(className: string) {
+  console.log(`🏗️ [WEAVIATE] Ensuring schema class: ${className}`);
+  
+  const schemaDefinition = schemaClasses.find((schemaClass) => schemaClass.class === className);
+  if (!schemaDefinition) {
+    console.warn(`[WEAVIATE] Schema definition for class ${className} not found`);
+    return false;
+  }
+
+  console.log(`📋 [WEAVIATE] Found schema definition for ${className}:`, {
+    properties: schemaDefinition.properties?.length || 0,
+    references: schemaDefinition.references?.length || 0
+  });
+
+  const schema = await fetchSchema();
+  const classExists = !!findClassSchema(schema, className);
+  if (classExists) {
+    console.log(`✅ [WEAVIATE] Class ${className} already exists`);
+    return false;
+  }
+
+  console.log(`🔨 [WEAVIATE] Creating class ${className}...`);
+  const weaviateClient = getWeaviateClient();
+
+  await weaviateClient.schema
+    .classCreator()
+    .withClass({
+      class: schemaDefinition.class,
+      description: schemaDefinition.description,
+      properties: schemaDefinition.properties
+    })
+    .do();
+
+  console.log(`✅ [WEAVIATE] Created class ${className}`);
+
+  if (schemaDefinition.references?.length) {
+    console.log(`🔗 [WEAVIATE] Adding ${schemaDefinition.references.length} references to ${className}...`);
+    for (const reference of schemaDefinition.references) {
+      try {
+        await weaviateClient.schema
+          .propertyCreator()
+          .withClassName(schemaDefinition.class)
+          .withProperty({
+            name: reference.name,
+            dataType: [reference.targetClass]
+          })
+          .do();
+        console.log(`✅ [WEAVIATE] Added reference ${reference.name} -> ${reference.targetClass} to ${className}`);
+      } catch (error: any) {
+        if (
+          !String(error?.message || '').includes(
+            `already has a property with name ${reference.name}`
+          )
+        ) {
+          console.warn(
+            `⚠️ Failed to add reference ${reference.name} to ${schemaDefinition.class}:`,
+            error
+          );
+        } else {
+          console.log(`ℹ️ [WEAVIATE] Reference ${reference.name} already exists on ${className}`);
+        }
+      }
+    }
+  }
+
+  console.log(`✅ [WEAVIATE] Ensured schema class ${className}`);
+  return true;
 }
 
 export async function getObjectWithReferences(className: string, uuid: string) {
@@ -179,7 +249,12 @@ export async function updateObjectWithReferences(
     .withProperties(data);
 
   if (options?.vector) {
-    updater = updater.withVector(options.vector);
+    const maybeUpdater: any = updater;
+    if (typeof maybeUpdater.withVector === 'function') {
+      updater = maybeUpdater.withVector(options.vector);
+    } else {
+      console.warn('⚠️ [WEAVIATE] withVector not supported on updater; skipping vector update');
+    }
   }
 
   const result = await updater.do();
@@ -216,9 +291,10 @@ async function findReferencingObjects(targetClassName: string, targetUuid: strin
   const referenceMap: Record<string, string[]> = {
     ResearchGoal: ['QuestionPlan', 'InterviewSession', 'BatchSummary'],
     QuestionPlan: ['InterviewSession'],
-    InterviewSession: ['TranscriptChunk', 'PsychProfile', 'BatchSummary', 'Annotation'],
+    InterviewSession: ['TranscriptChunk', 'PsychometricProfile', 'BatchSummary', 'Annotation', 'TranscriptDocument'],
     TranscriptChunk: ['Annotation'],
-    PsychProfile: [],
+    TranscriptDocument: [],
+    PsychometricProfile: [],
     BatchSummary: [],
     Annotation: []
   };
@@ -259,8 +335,9 @@ function referencePropertyForClass(className: string, targetClassName: string) {
     QuestionPlan: { ResearchGoal: 'researchGoal' },
     InterviewSession: { ResearchGoal: 'researchGoal' },
     TranscriptChunk: { InterviewSession: 'session' },
+    TranscriptDocument: { InterviewSession: 'session' },
     Annotation: { InterviewSession: 'session', TranscriptChunk: 'chunk' },
-    PsychProfile: { InterviewSession: 'session' },
+    PsychometricProfile: { InterviewSession: 'session' },
     BatchSummary: { ResearchGoal: 'researchGoal', InterviewSession: 'sessions' }
   };
 

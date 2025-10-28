@@ -73,7 +73,6 @@ async function loadAllSessionsFromWeaviate() {
         durationMinutes
         script
         transcript
-        summaries
         insights
         psychometricProfile
         keyFindings
@@ -117,7 +116,7 @@ export async function POST(request: NextRequest) {
 
     const sessionId = uuidv4();
     const roomName = `interview-${sessionId}`;
-    const sessionUrl = `${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'}/respondent?session=${sessionId}`;
+    const sessionUrl = `http://localhost:3000/respondent?session=${sessionId}`;
 
     console.log('🔵 [SESSIONS API] Creating session:', sessionId);
     console.log('🔵 [SESSIONS API] Room name:', roomName);

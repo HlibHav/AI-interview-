@@ -1,106 +1,190 @@
 import { NextRequest, NextResponse } from 'next/server';
 import OpenAI from 'openai';
+import {
+  fetchInterviewSession,
+  fetchTranscriptDocument,
+  normalizeTranscriptEntries,
+  renderTranscriptText,
+  upsertPsychometricProfile
+} from '@/lib/weaviate/weaviate-session';
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+const openai = process.env.OPENAI_API_KEY
+  ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+  : null;
 
-// Helper function to store data in Weaviate
-async function storeInWeaviate(className: string, data: any) {
-  try {
-    const response = await fetch('http://localhost:3000/api/weaviate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'store', className, data })
-    });
-    return await response.json();
-  } catch (error) {
-    console.error('Weaviate storage error:', error);
-    return null;
+type PsychometricRequestBody = {
+  fullTranscript?: any;
+  researchGoal?: string;
+  summaries?: any[];
+  sessionUuid?: string;
+  sessionId?: string;
+  weaviateSessionId?: string;
+};
+
+function extractScore(source: any, trait: string): number {
+  const raw = source?.traits?.[trait]?.score;
+  if (typeof raw === 'number' && Number.isFinite(raw)) {
+    return raw;
   }
+  const numeric = Number(raw);
+  return Number.isFinite(numeric) ? numeric : 0;
 }
 
 export async function POST(request: NextRequest) {
   try {
-    const { fullTranscript, researchGoal, summaries } = await request.json();
+    const body: PsychometricRequestBody = await request.json();
 
-    const systemPrompt = `You are a psychologist. Based on this conversation, estimate the participant's openness, conscientiousness, extraversion, agreeableness and neuroticism on a 0–100 scale. Provide a brief justification for each score. If possible, guess the Enneagram type (1–9) with a sentence of reasoning. Output a JSON object with \`traits\` and \`explanation\` fields.
+    const sessionId = body.sessionId || body.sessionUuid;
+    if (!sessionId) {
+      return NextResponse.json(
+        { error: 'sessionId or sessionUuid is required' },
+        { status: 400 }
+      );
+    }
 
-Guidelines:
-- Draw from the actual statements made during the interview. Do not rely solely on the emotional delivery.
-- If there is insufficient information for a trait, state that the score is uncertain.
-- Provide detailed reasoning for each personality trait score.
-- Consider both explicit statements and implicit behavioral patterns.`;
+    if (!openai) {
+      return NextResponse.json(
+        {
+          error:
+            'OPENAI_API_KEY is not configured. Unable to generate psychometric profile.',
+          sessionId
+        },
+        { status: 500 }
+      );
+    }
 
-    const userPrompt = `Research Goal: ${researchGoal}
-Full Interview Transcript: ${fullTranscript}
-Session Summaries: ${JSON.stringify(summaries)}
+    let researchGoal = body.researchGoal;
+    let transcriptEntries = normalizeTranscriptEntries(body.fullTranscript);
 
-Analyze the participant's personality and provide a comprehensive psychometric profile. Return a JSON object with:
+    const sessionRecord = await fetchInterviewSession(sessionId);
+    if (sessionRecord) {
+      researchGoal = researchGoal || sessionRecord.researchGoal || '';
+    }
+
+    if (transcriptEntries.length === 0) {
+      const transcriptDocument = await fetchTranscriptDocument(sessionId);
+      if (transcriptDocument) {
+        transcriptEntries = transcriptDocument.entries;
+      }
+    }
+
+    if (transcriptEntries.length === 0) {
+      return NextResponse.json(
+        { error: 'Transcript data not found for psychometric analysis', sessionId },
+        { status: 404 }
+      );
+    }
+
+    const fullTranscriptText = renderTranscriptText(transcriptEntries);
+
+    const summaryList =
+      (Array.isArray(body.summaries) && body.summaries.length > 0
+        ? body.summaries
+        : sessionRecord?.summaries) || [];
+
+    const systemPrompt = `You are an organisational psychologist analysing qualitative interviews.
+Return detailed, evidence-backed personality insights using the Big Five model and Enneagram.
+Scores must be 0-100 integers. Provide empathetic, grounded explanations citing moments from the transcript.`;
+
+    const userPrompt = `Research Goal: ${researchGoal || 'not provided'}
+Summaries: ${JSON.stringify(summaryList, null, 2)}
+
+Full Transcript:
+${fullTranscriptText}
+
+Respond with JSON using this schema:
 {
   "traits": {
-    "openness": {
-      "score": number,
-      "explanation": "string"
-    },
-    "conscientiousness": {
-      "score": number,
-      "explanation": "string"
-    },
-    "extraversion": {
-      "score": number,
-      "explanation": "string"
-    },
-    "agreeableness": {
-      "score": number,
-      "explanation": "string"
-    },
-    "neuroticism": {
-      "score": number,
-      "explanation": "string"
-    }
+    "openness": { "score": number, "explanation": "string" },
+    "conscientiousness": { "score": number, "explanation": "string" },
+    "extraversion": { "score": number, "explanation": "string" },
+    "agreeableness": { "score": number, "explanation": "string" },
+    "neuroticism": { "score": number, "explanation": "string" }
   },
   "enneagram": {
     "type": number,
     "explanation": "string"
   },
   "overallProfile": "string",
-  "keyInsights": ["insight1", "insight2"]
+  "keyInsights": ["string", "..."]
 }`;
 
     const completion = await openai.chat.completions.create({
-      model: "gpt-4",
+      model: process.env.OPENAI_PSYCHOMETRIC_MODEL || 'gpt-4o-mini',
       messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt }
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt }
       ],
-      temperature: 0.3,
-      response_format: { type: "json_object" }
+      temperature: 0.2,
+      response_format: { type: 'json_object' }
     });
 
-    const response = completion.choices[0].message.content;
-    const psychometricProfile = JSON.parse(response || '{}');
+    const responseContent = completion.choices[0]?.message?.content ?? '{}';
+    const psychometricProfile = JSON.parse(responseContent);
 
-    // Store psychological profile in Weaviate
-    const profileData = {
-      sessionId: 'session-' + Date.now(), // You might want to pass this from the request
-      openness: psychometricProfile.traits?.openness?.score || 0,
-      conscientiousness: psychometricProfile.traits?.conscientiousness?.score || 0,
-      extraversion: psychometricProfile.traits?.extraversion?.score || 0,
-      agreeableness: psychometricProfile.traits?.agreeableness?.score || 0,
-      neuroticism: psychometricProfile.traits?.neuroticism?.score || 0,
-      enneagramType: psychometricProfile.enneagram?.type || 0,
+    console.log('🧠 [PSYCHOMETRIC] Generated profile:', {
+      sessionId,
+      weaviateSessionId: sessionRecord?.weaviateId,
+      profileKeys: Object.keys(psychometricProfile),
+      traits: psychometricProfile?.traits ? Object.keys(psychometricProfile.traits) : 'none'
+    });
+
+    const profileInput = {
+      openness: extractScore(psychometricProfile, 'openness'),
+      conscientiousness: extractScore(psychometricProfile, 'conscientiousness'),
+      extraversion: extractScore(psychometricProfile, 'extraversion'),
+      agreeableness: extractScore(psychometricProfile, 'agreeableness'),
+      neuroticism: extractScore(psychometricProfile, 'neuroticism'),
+      enneagramType: psychometricProfile?.enneagram?.type
+        ? Number(psychometricProfile.enneagram.type)
+        : undefined,
       explanation: JSON.stringify(psychometricProfile),
-      createdAt: new Date().toISOString()
+      keyInsights: psychometricProfile?.keyInsights || [],
+      overallProfile: psychometricProfile?.overallProfile
     };
-    
-    await storeInWeaviate('PsychProfile', profileData);
+
+    console.log('🧠 [PSYCHOMETRIC] About to upsert PsychProfile:', {
+      sessionId,
+      weaviateSessionId: sessionRecord?.weaviateId,
+      profileInput: {
+        openness: profileInput.openness,
+        conscientiousness: profileInput.conscientiousness,
+        extraversion: profileInput.extraversion,
+        agreeableness: profileInput.agreeableness,
+        neuroticism: profileInput.neuroticism,
+        enneagramType: profileInput.enneagramType,
+        explanationLength: profileInput.explanation?.length || 0,
+        keyInsightsCount: profileInput.keyInsights?.length || 0
+      }
+    });
+
+    try {
+      const psychProfileId = await upsertPsychometricProfile(
+        sessionId,
+        profileInput,
+        body.weaviateSessionId || sessionRecord?.weaviateId || null
+      );
+
+      console.log('✅ [PSYCHOMETRIC] Successfully upserted PsychProfile:', {
+        sessionId,
+        psychProfileId,
+        weaviateSessionId: body.weaviateSessionId || sessionRecord?.weaviateId
+      });
+    } catch (upsertError) {
+      console.error('❌ [PSYCHOMETRIC] Failed to upsert PsychProfile:', {
+        sessionId,
+        weaviateSessionId: body.weaviateSessionId || sessionRecord?.weaviateId,
+        error: upsertError
+      });
+      throw upsertError;
+    }
 
     return NextResponse.json({
       success: true,
-      profile: psychometricProfile
+      sessionId,
+      profile: psychometricProfile,
+      tokenUsage: completion.usage
     });
-
   } catch (error) {
     console.error('Psychometric agent error:', error);
     return NextResponse.json(

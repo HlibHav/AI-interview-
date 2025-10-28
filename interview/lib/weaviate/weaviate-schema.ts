@@ -101,6 +101,22 @@ export const schemaClasses: SchemaClassDefinition[] = [
     ]
   },
   {
+    class: 'TranscriptDocument',
+    description: 'Full transcript document for an interview session',
+    properties: [
+      { name: 'sessionId', dataType: ['text'] },
+      { name: 'text', dataType: ['text'] },
+      { name: 'json', dataType: ['text'] },
+      { name: 'messageCount', dataType: ['int'] },
+      { name: 'wordCount', dataType: ['int'] },
+      { name: 'createdAt', dataType: ['date'] },
+      { name: 'updatedAt', dataType: ['date'] }
+    ],
+    references: [
+      { name: 'session', targetClass: 'InterviewSession' }
+    ]
+  },
+  {
     class: 'Annotation',
     description: 'Human or AI labels applied to transcript content',
     properties: [
@@ -120,7 +136,7 @@ export const schemaClasses: SchemaClassDefinition[] = [
     ]
   },
   {
-    class: 'PsychProfile',
+    class: 'PsychometricProfile',
     description: 'Psychological profiles from interviews',
     properties: [
       { name: 'sessionId', dataType: ['text'] }, // backup text field
