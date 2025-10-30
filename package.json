@@ -1,0 +1,10 @@
+{
+  "dependencies": {
+    "@arizeai/openinference-semantic-conventions": "^2.1.2",
+    "@opentelemetry/auto-instrumentations-node": "^0.66.0",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.207.0",
+    "@opentelemetry/resources": "^2.2.0",
+    "@opentelemetry/sdk-node": "^0.207.0",
+    "@opentelemetry/semantic-conventions": "^1.37.0"
+  }
+}
