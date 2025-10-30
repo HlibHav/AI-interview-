@@ -28,9 +28,9 @@ export default function SimpleBPInterviewRoom({
   const [transcript, setTranscript] = useState<any[]>([]);
   const [beyAgentId, setBeyAgentId] = useState<string | null>(null);
   const beyAgentIdRef = useRef<string | null>(null);
-  const exportInFlightRef = useRef(false);
-  const exportCompletedRef = useRef(false);
   const startBtnLock = useRef(false);
+  const eventSourceRef = useRef<EventSource | null>(null);
+  const completionTriggeredRef = useRef(false);
 
   // Function to add conversation entry to transcript
   const addToTranscript = (speaker: string, text: string) => {
@@ -109,63 +109,14 @@ export default function SimpleBPInterviewRoom({
     }
   }, [sessionId, transcript, beyAgentId]);
 
-  const triggerTranscriptExport = useCallback(
-    async (reason: string) => {
-      if (exportInFlightRef.current) {
-        console.log('ℹ️ [SIMPLE ROOM] Export already in flight, skipping duplicate trigger', {
-          reason,
-          sessionId
-        });
-        return;
-      }
-
-      exportInFlightRef.current = true;
-      try {
-        const agentIdentifier = beyAgentIdRef.current || beyAgentId;
-        const payload: Record<string, any> = { sessionId };
-        if (agentIdentifier) {
-          payload.beyAgentId = agentIdentifier;
-        }
-
-        console.log('🛰️ [SIMPLE ROOM] Triggering Beyond Presence transcript export', {
-          reason,
-          hasAgentId: Boolean(agentIdentifier),
-          sessionId
-        });
-
-        const response = await fetch('/api/beyond-presence/export-transcript', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(payload)
-        });
-
-        const exportPayload = await response.json();
-        console.log('🛰️ [SIMPLE ROOM] Export attempt result', {
-          reason,
-          status: response.status,
-          ok: response.ok,
-          exportPayload
-        });
-
-        if (response.ok) {
-          exportCompletedRef.current = true;
-        }
-      } catch (exportError) {
-        console.error('⚠️ [SIMPLE ROOM] Export attempt failed', {
-          reason,
-          error: exportError
-        });
-      } finally {
-        exportInFlightRef.current = false;
-      }
-    },
-    [beyAgentId, sessionId]
-  );
-
   // Function to complete session with real data
-  const completeSession = async () => {
+  const completeSession = useCallback(async () => {
+    if (completionTriggeredRef.current) {
+      console.log('ℹ️ [SIMPLE ROOM] Session completion already triggered');
+      return;
+    }
+    completionTriggeredRef.current = true;
+
     try {
       setAgentStatus('Completing session...');
       if (transcript.length === 0) {
@@ -175,6 +126,11 @@ export default function SimpleBPInterviewRoom({
         sessionId,
         localEntries: transcript.length
       });
+
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+        eventSourceRef.current = null;
+      }
       
       // First persist the transcript (even if empty) and agent metadata
       await updateSessionTranscript();
@@ -195,9 +151,6 @@ export default function SimpleBPInterviewRoom({
         console.log('✅ [SIMPLE ROOM] Session completed with real data', result);
         setAgentStatus('Session completed successfully!');
 
-        await triggerTranscriptExport('session-complete');
-
-        // Show completion message
         alert('Interview completed! Check the admin dashboard for insights and analysis.');
       } else {
         const errorData = await response.json();
@@ -206,8 +159,9 @@ export default function SimpleBPInterviewRoom({
     } catch (error) {
       console.error('❌ [SIMPLE ROOM] Error completing session:', error);
       setError(`Failed to complete session: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      completionTriggeredRef.current = false;
     }
-  };
+  }, [sessionId, transcript, updateSessionTranscript]);
 
   const generateSystemPrompt = (researchGoal?: string, interviewScript?: any): string => {
     const basePrompt = `You are an AI research interviewer conducting a qualitative interview. Your role is to:
@@ -275,8 +229,7 @@ Follow this script but feel free to ask follow-up questions based on the partici
     if (startBtnLock.current) return;
     startBtnLock.current = true;
     setError(null);
-    exportCompletedRef.current = false;
-    exportInFlightRef.current = false;
+    completionTriggeredRef.current = false;
 
     try {
       setState('initializing');
@@ -354,10 +307,9 @@ Follow this script but feel free to ask follow-up questions based on the partici
   }, [sessionId, researchGoal, interviewScript, updateSessionTranscript, transcript]);
 
   const stop = useCallback(async () => {
-    if (beyAgentIdRef.current || beyAgentId) {
-      await triggerTranscriptExport('manual-stop');
-    } else {
-      console.warn('ℹ️ [SIMPLE ROOM] No Beyond Presence agent identifier available during stop');
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+      eventSourceRef.current = null;
     }
 
     setState('idle');
@@ -369,115 +321,172 @@ Follow this script but feel free to ask follow-up questions based on the partici
     setBeyAgentId(null);
     beyAgentIdRef.current = null;
     console.log('ℹ️ [SIMPLE ROOM] Interview stopped, local state reset');
-  }, [triggerTranscriptExport, beyAgentId]);
+  }, []);
 
   const disconnect = async () => {
+    await completeSession();
     await stop();
     onDisconnect?.();
   };
 
   useEffect(() => {
     return () => {
-      if (!exportCompletedRef.current) {
-        void triggerTranscriptExport('component-unmount');
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+        eventSourceRef.current = null;
       }
     };
-  }, [triggerTranscriptExport]);
+  }, []);
+
+  // Auto-start the interview on mount
+  useEffect(() => {
+    void start();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Listen for BEY call end events from the embed (postMessage)
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const handleBeyMessage = (event: MessageEvent) => {
+      try {
+        const data: any = event.data;
+        if (!data) return;
+
+        const ended =
+          data.type === 'call_ended' ||
+          data.event === 'call_ended' ||
+          data.status === 'ended' ||
+          data.state === 'ended';
+
+        if (ended) {
+          console.log('📞 [SIMPLE ROOM] BEY call ended detected via postMessage');
+          if (eventSourceRef.current) {
+            eventSourceRef.current.close();
+            eventSourceRef.current = null;
+          }
+          setAgentStatus('Call ended. Finalising session...');
+          void completeSession().finally(() => {
+            stop().catch(() => null);
+          });
+        }
+      } catch (e) {
+        // ignore malformed events
+      }
+    };
+
+    window.addEventListener('message', handleBeyMessage);
+    return () => window.removeEventListener('message', handleBeyMessage);
+  }, [completeSession, stop]);
 
   useEffect(() => {
-    if (typeof window === 'undefined') {
+    if (typeof window === 'undefined') return;
+    if (!beyAgentId) return;
+    if (completionTriggeredRef.current) {
       return;
     }
 
-    const handleBeforeUnload = () => {
-      if (exportCompletedRef.current) {
-        return;
-      }
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+      eventSourceRef.current = null;
+    }
 
-      const agentIdentifier = beyAgentIdRef.current || beyAgentId;
-      if (!agentIdentifier) {
-        return;
-      }
+    try {
+      const url = new URL(`/api/beyond-presence/stream/${beyAgentId}`, window.location.origin);
+      url.searchParams.set('sessionId', sessionId);
 
-      const payload = JSON.stringify({
-        sessionId,
-        beyAgentId: agentIdentifier
-      });
+      const eventSource = new EventSource(url.toString());
+      eventSourceRef.current = eventSource;
 
-      try {
-        const endpoint = `${window.location.origin}/api/beyond-presence/export-transcript`;
-        const blob = new Blob([payload], { type: 'application/json' });
-        const success = navigator.sendBeacon(endpoint, blob);
-        console.log('📡 [SIMPLE ROOM] sendBeacon export attempt before unload', {
-          success,
-          sessionId
-        });
-      } catch (error) {
-        console.warn('⚠️ [SIMPLE ROOM] sendBeacon export failed', error);
-      }
-    };
+      eventSource.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(event.data);
+          if (!payload || !payload.type) {
+            return;
+          }
 
-    window.addEventListener('beforeunload', handleBeforeUnload);
+          if (payload.type === 'call-ended') {
+            console.log('📡 [SIMPLE ROOM] Stream reported call ended', payload);
+            setAgentStatus('Call ended. Finalising session...');
+            void completeSession().finally(() => {
+              stop().catch(() => null);
+            });
+            return;
+          }
+
+          if (payload.type === 'text' || payload.type === 'agent_message') {
+            const speaker = payload.type === 'agent_message' || payload.speaker === 'agent' ? 'agent' : 'participant';
+            const text = payload.text || payload.message || payload.raw?.message || '';
+            if (!text) {
+              return;
+            }
+
+            const entry = {
+              speaker,
+              text,
+              timestamp: payload.timestamp || new Date().toISOString()
+            };
+
+            setTranscript((prev) => {
+              const duplicate = prev.some(
+                (existing) =>
+                  existing.speaker === entry.speaker &&
+                  existing.text === entry.text &&
+                  existing.timestamp === entry.timestamp
+              );
+              if (duplicate) {
+                return prev;
+              }
+              return [...prev, entry];
+            });
+          }
+        } catch (streamError) {
+          console.error('⚠️ [SIMPLE ROOM] Failed to process stream event:', streamError);
+        }
+      };
+
+      eventSource.onerror = (err) => {
+        console.error('⚠️ [SIMPLE ROOM] Stream connection error:', err);
+      };
+    } catch (connectionError) {
+      console.error('⚠️ [SIMPLE ROOM] Failed to initialise transcript stream:', connectionError);
+    }
+
     return () => {
-      window.removeEventListener('beforeunload', handleBeforeUnload);
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+        eventSourceRef.current = null;
+      }
     };
   }, [beyAgentId, sessionId]);
 
   return (
     <div className="min-h-screen bg-gray-900 text-white p-6">
-      <div className="max-w-4xl mx-auto">
-        <div className="bg-gray-800 rounded-lg p-6 mb-4">
-          <h1 className="text-2xl font-bold mb-4">Simple AI Interview Room</h1>
-          <div className="text-sm text-gray-300 mb-4">
-            State: <span className="font-medium">{state}</span>
-            {error && <span className="text-red-400"> · {error}</span>}
-          </div>
-          <div className="text-sm text-gray-300 mb-4">
-            Agent Status: <span className="font-medium">{agentStatus}</span>
+        <div className="max-w-4xl mx-auto">
+          <div className="mb-4">
+            {state !== 'connected' ? (
+              <div className="bg-gray-800 rounded-lg p-6 mb-4">
+                <h1 className="text-2xl font-bold mb-4">Simple AI Interview Room</h1>
+                <div className="text-sm text-gray-300 mb-2">
+                  State: <span className="font-medium">{state}</span>
+                  {error && <span className="text-red-400"> · {error}</span>}
+                </div>
+                <div className="text-sm text-gray-300">
+                  Agent Status: <span className="font-medium">{agentStatus}</span>
+                </div>
+              </div>
+            ) : (
+              <div className="text-sm text-gray-400 mb-4">
+                {agentStatus}
+              </div>
+            )}
           </div>
 
-          <div className="flex gap-2">
-            <button
-              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white rounded-lg font-medium" 
-              onClick={start} 
-              disabled={state !== 'idle' && state !== 'error'}
-            >
-              {state === 'connected' ? 'Agent Ready' : 'Start Interview'}
-            </button>
-            <button
-              className="px-4 py-2 bg-red-600 hover:bg-red-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white rounded-lg font-medium" 
-              onClick={stop}  
-              disabled={state === 'idle'}
-            >
-              Stop
-            </button>
-            <button
-              className="px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white rounded-lg font-medium" 
-              onClick={completeSession}
-            >
-              Complete Interview
-            </button>
-            <button
-              className="px-4 py-2 bg-purple-600 hover:bg-purple-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white rounded-lg font-medium" 
-              onClick={simulateConversation}
-              disabled={transcript.length > 0}
-            >
-              Simulate Conversation
-            </button>
-            <button
-              className="px-4 py-2 bg-gray-600 hover:bg-gray-700 text-white rounded-lg font-medium" 
-              onClick={disconnect}
-            >
-              Disconnect
-            </button>
-          </div>
-        </div>
-
-        {state === 'connected' && agent && (
-          <div className="bg-gray-800 rounded-lg p-6">
-            <h2 className="text-xl font-bold mb-4">AI Agent Ready</h2>
-            
-            {embedUrl ? (
+          {state === 'connected' && agent && (
+            <div className="bg-gray-800 rounded-lg p-6">
+              <h2 className="text-xl font-bold mb-4">AI Agent Ready</h2>
+              
+              {embedUrl ? (
               <div className="mb-4">
                 <h3 className="text-lg font-semibold mb-2">Embedded Agent</h3>
                 <iframe 

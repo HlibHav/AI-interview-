@@ -246,69 +246,10 @@ export async function POST(request: NextRequest) {
 
     if (transcript.length > 0) {
       const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000';
-      try {
-        console.log('🧠 [BEY EXPORT] Triggering automatic session completion via /api/sessions/real-complete', {
-          sessionId,
-          transcriptEntries: transcript.length
-        });
-        const realCompleteResponse = await fetch(`${baseUrl}/api/sessions/real-complete`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sessionId })
-        });
-
-        if (realCompleteResponse.ok) {
-          autoCompletionTriggered = true;
-          autoCompletionResponse = await realCompleteResponse.json();
-          console.log('✅ [BEY EXPORT] Automatic session completion succeeded', {
-            sessionId
-          });
-        } else {
-          const errorBody = await realCompleteResponse.text();
-          console.error('❌ [BEY EXPORT] Automatic session completion failed', {
-            sessionId,
-            status: realCompleteResponse.status,
-            errorBody
-          });
-        }
-      } catch (completionError) {
-        console.error('❌ [BEY EXPORT] Error triggering automatic session completion:', completionError);
-      }
-
-      if (!autoCompletionTriggered) {
-        try {
-          console.log('🧠 [BEY EXPORT] Fallback: calling /api/sessions/complete directly', {
-            sessionId,
-            transcriptEntries: transcript.length
-          });
-          const completionResponse = await fetch(`${baseUrl}/api/sessions/complete`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              sessionId,
-              transcript,
-              researchGoal: updatedSession.researchGoal
-            })
-          });
-
-          if (completionResponse.ok) {
-            autoCompletionTriggered = true;
-            autoCompletionResponse = await completionResponse.json();
-            console.log('✅ [BEY EXPORT] Session completion succeeded via fallback', {
-              sessionId
-            });
-          } else {
-            const errorBody = await completionResponse.text();
-            console.error('❌ [BEY EXPORT] Fallback session completion failed', {
-              sessionId,
-              status: completionResponse.status,
-              errorBody
-            });
-          }
-        } catch (fallbackError) {
-          console.error('❌ [BEY EXPORT] Error during fallback session completion:', fallbackError);
-        }
-      }
+      console.log('🧠 [BEY EXPORT] Skipping automatic session completion; realtime data already processed', {
+        sessionId,
+        transcriptEntries: transcript.length
+      });
     }
 
     return NextResponse.json({

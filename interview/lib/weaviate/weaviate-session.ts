@@ -7,6 +7,12 @@ import {
   updateObjectWithReferences
 } from './weaviate-helpers';
 import { generateEmbeddingForChunk } from '@/lib/embeddings/transcript';
+import { 
+  estimateTokens, 
+  splitLongMessage, 
+  validateChunkSize, 
+  createChunkMetadata 
+} from '@/lib/chunking';
 
 export type TranscriptChunkInput = {
   speaker: string;
@@ -17,6 +23,10 @@ export type TranscriptChunkInput = {
   sentiment?: string;
   turnIndex?: number;
   embedding?: number[];
+  // New fields for split chunk tracking
+  partNumber?: number;
+  totalParts?: number;
+  originalMessageId?: string;
 };
 
 export type FullTranscriptEntry = {
@@ -252,6 +262,9 @@ export async function upsertInterviewChunks(
   entries: TranscriptChunkInput[]
 ) {
   let stored = 0;
+  let splitCount = 0;
+  let totalTokensBefore = 0;
+  let totalTokensAfter = 0;
 
   console.log('🛰️ [WEAVIATE] Upserting transcript chunks', {
     sessionId,
@@ -259,7 +272,47 @@ export async function upsertInterviewChunks(
     weaviateSessionId
   });
 
-  for (const [index, entry] of entries.entries()) {
+  // Preprocess entries to handle long messages
+  const processedEntries: TranscriptChunkInput[] = [];
+  
+  for (const entry of entries) {
+    const tokens = estimateTokens(entry.text);
+    totalTokensBefore += tokens;
+    
+    const validation = validateChunkSize(entry.text);
+    
+    if (validation.recommendation === 'split' && tokens > 200) {
+      // Split long messages into semantic chunks
+      const subChunks = splitLongMessage(entry);
+      processedEntries.push(...subChunks);
+      splitCount += subChunks.length - 1; // Track how many splits occurred
+      
+      console.log(`📝 [CHUNKING] Split long message (${tokens} tokens) into ${subChunks.length} parts`, {
+        sessionId,
+        originalLength: entry.text.length,
+        splitParts: subChunks.length
+      });
+    } else {
+      // Keep original message
+      processedEntries.push(entry);
+    }
+  }
+
+  // Calculate total tokens after processing
+  totalTokensAfter = processedEntries.reduce((sum, entry) => sum + estimateTokens(entry.text), 0);
+
+  console.log('📊 [CHUNKING] Processing statistics', {
+    sessionId,
+    originalEntries: entries.length,
+    processedEntries: processedEntries.length,
+    messagesSplit: splitCount,
+    averageTokensBefore: Math.round(totalTokensBefore / entries.length),
+    averageTokensAfter: Math.round(totalTokensAfter / processedEntries.length),
+    totalTokensBefore,
+    totalTokensAfter
+  });
+
+  for (const [index, entry] of processedEntries.entries()) {
     const chunkId = uuidv5(
       `${sessionId}:${entry.timestamp}:${entry.speaker}:${entry.text}`,
       uuidv5.URL
@@ -285,7 +338,11 @@ export async function upsertInterviewChunks(
         speaker: entry.speaker,
         text: entry.text,
         summary: entry.summary,
-        keywords: entry.keywords
+        keywords: entry.keywords,
+        // Pass split chunk metadata to embedding generation
+        partNumber: entry.partNumber,
+        totalParts: entry.totalParts,
+        originalMessageId: entry.originalMessageId
       }));
     const createOptions = {
       id: chunkId,
@@ -553,6 +610,104 @@ export async function fetchTranscriptDocument(
     createdAt: document.createdAt,
     updatedAt: document.updatedAt
   };
+}
+
+type TranscriptChunkRecord = {
+  speaker?: string;
+  text?: string;
+  timestamp?: string;
+  turnIndex?: number;
+  raw?: Record<string, any>;
+  order: number;
+};
+
+export async function fetchTranscriptChunks(
+  sessionId: string,
+  options?: { limit?: number }
+): Promise<FullTranscriptEntry[]> {
+  const weaviateClient = getWeaviateClient();
+  const pageSize = 100;
+  const requestedLimit = options?.limit ?? 2000;
+  const chunks: TranscriptChunkRecord[] = [];
+  let offset = 0;
+
+  for (;;) {
+    const batchLimit = Math.min(pageSize, requestedLimit - chunks.length);
+    if (batchLimit <= 0) {
+      break;
+    }
+
+    const result = await weaviateClient.graphql
+      .get()
+      .withClassName('TranscriptChunk')
+      .withFields(`
+        speaker
+        text
+        summary
+        keywords
+        sentiment
+        timestamp
+        turnIndex
+      `)
+      .withWhere({
+        path: ['sessionId'],
+        operator: 'Equal',
+        valueText: sessionId
+      })
+      .withLimit(batchLimit)
+      .withOffset(offset)
+      .do();
+
+    const records: Record<string, any>[] = result.data?.Get?.TranscriptChunk ?? [];
+    if (records.length === 0) {
+      break;
+    }
+
+    records.forEach((record, index) => {
+      const turnIndex =
+        typeof record?.turnIndex === 'number' && !Number.isNaN(record.turnIndex)
+          ? record.turnIndex
+          : undefined;
+
+      chunks.push({
+        speaker: record?.speaker,
+        text: record?.text,
+        timestamp: record?.timestamp,
+        turnIndex,
+        raw: record,
+        order: offset + index
+      });
+    });
+
+    offset += records.length;
+    if (records.length < batchLimit) {
+      break;
+    }
+  }
+
+  const orderValue = (chunk: TranscriptChunkRecord) => {
+    if (typeof chunk.turnIndex === 'number') {
+      return chunk.turnIndex;
+    }
+    if (chunk.timestamp) {
+      const ms = Date.parse(chunk.timestamp);
+      if (!Number.isNaN(ms)) {
+        return ms;
+      }
+    }
+    return chunk.order;
+  };
+
+  const sorted = chunks
+    .sort((a, b) => orderValue(a) - orderValue(b))
+    .filter((chunk) => typeof chunk.text === 'string' && chunk.text.trim().length > 0);
+
+  return sorted.map((chunk) => ({
+    speaker: chunk.speaker || 'unknown',
+    text: (chunk.text || '').trim(),
+    timestamp: chunk.timestamp,
+    raw: chunk.raw
+  }));
 }
 
 export async function resolveWeaviateSessionId(sessionId: string): Promise<string | null> {
@@ -845,6 +1000,66 @@ export async function fetchInterviewSession(sessionId: string) {
     console.warn('ℹ️ [WEAVIATE] InterviewSession not found', { sessionId });
   }
   return parseInterviewSession(session);
+}
+
+async function fetchInterviewSessionByField(field: string, value: string) {
+  const weaviateClient = getWeaviateClient();
+
+  const result = await weaviateClient.graphql
+    .get()
+    .withClassName('InterviewSession')
+    .withFields(`
+      _additional { id }
+      sessionId
+      sessionUrl
+      researchGoal
+      targetAudience
+      duration
+      sensitivity
+      participantEmail
+      participantName
+      roomName
+      beyondPresenceAgentId
+      beyondPresenceSessionId
+      status
+      startTime
+      endTime
+      durationMinutes
+      script
+      transcript
+      insights
+      psychometricProfile
+      keyFindings
+      summary
+      createdAt
+      updatedAt
+      createdBy
+      tags
+      isPublic
+      accessCode
+    `)
+    .withWhere({
+      path: [field],
+      operator: 'Equal',
+      valueText: value
+    })
+    .withLimit(1)
+    .do();
+
+  const session = result.data?.Get?.InterviewSession?.[0];
+  if (!session) {
+    return null;
+  }
+  return parseInterviewSession(session);
+}
+
+export async function fetchInterviewSessionByBeyondPresenceSessionId(
+  beyondPresenceSessionId: string
+) {
+  console.log('🔍 [WEAVIATE] Fetching InterviewSession by BEY session id', {
+    beyondPresenceSessionId
+  });
+  return fetchInterviewSessionByField('beyondPresenceSessionId', beyondPresenceSessionId);
 }
 
 export async function backfillTranscriptChunkReferences(

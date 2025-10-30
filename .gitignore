@@ -44,3 +44,13 @@ out/
 *.temp
 .cache/
 
+# Explicit allows for examples (do not ignore these)
+!config/env.example
+!**/env.example
+
+# Additional secret locations
+.secrets/
+.secrets/**
+.envrc
+.npmrc
+

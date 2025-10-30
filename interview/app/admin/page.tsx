@@ -5,6 +5,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { Send, Users, FileText, BarChart3, Settings } from "lucide-react";
+import AnalysisProgressBar from "../components/AnalysisProgressBar";
 
 const researchGoalSchema = z.object({
   goal: z.string().min(10, "Please provide a more detailed research goal"),
@@ -36,6 +37,7 @@ export default function AdminDashboard() {
   const [sessionsData, setSessionsData] = useState<any[]>([]);
   const [isLoadingSessions, setIsLoadingSessions] = useState(false);
   const [sessionsError, setSessionsError] = useState<string | null>(null);
+  const pollingRef = React.useRef<NodeJS.Timeout | null>(null);
 
   const form = useForm<ResearchGoalForm>({
     resolver: zodResolver(researchGoalSchema),
@@ -47,9 +49,13 @@ export default function AdminDashboard() {
     },
   });
 
-  const loadSessions = useCallback(async () => {
-    setIsLoadingSessions(true);
-    setSessionsError(null);
+  const loadSessions = useCallback(async (options?: { silent?: boolean }) => {
+    const silent = options?.silent ?? false;
+
+    if (!silent) {
+      setIsLoadingSessions(true);
+      setSessionsError(null);
+    }
 
     try {
       const response = await fetch('/api/sessions', {
@@ -65,9 +71,13 @@ export default function AdminDashboard() {
       setSessionsData(Array.isArray(data.sessions) ? data.sessions : []);
     } catch (loadError: any) {
       console.error('Error loading sessions:', loadError);
-      setSessionsError(loadError?.message || 'Failed to load sessions.');
+      if (!silent) {
+        setSessionsError(loadError?.message || 'Failed to load sessions.');
+      }
     } finally {
-      setIsLoadingSessions(false);
+      if (!silent) {
+        setIsLoadingSessions(false);
+      }
     }
   }, []);
 
@@ -80,6 +90,47 @@ export default function AdminDashboard() {
       loadSessions().catch(() => null);
     }
   }, [currentStep, loadSessions]);
+
+  // Poll for sessions that are in analysis
+  useEffect(() => {
+    if (currentStep !== "sessions") {
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current);
+        pollingRef.current = null;
+      }
+      return;
+    }
+
+    const hasAnalyzingSessions = sessionsData.some(session => {
+      const status = session.status || 'created';
+      if (status !== 'completed') return false;
+      
+      const summaryRecord = session.summaries?.[0] || 
+        (session.summary ? { summary: session.summary, keyInsights: session.keyFindings } : null);
+      const hasSummary = summaryRecord && summaryRecord.summary && summaryRecord.summary !== 'Summary not yet generated.';
+      const hasPsychometricProfile = session.psychometricProfile && session.psychometricProfile.traits;
+      
+      return !hasSummary || !hasPsychometricProfile;
+    });
+
+    if (hasAnalyzingSessions && !pollingRef.current) {
+      console.log('🔄 Starting polling for analyzing sessions...');
+      pollingRef.current = setInterval(() => {
+        loadSessions({ silent: true }).catch(() => null);
+      }, 5000); // Poll every 5 seconds
+    } else if (!hasAnalyzingSessions && pollingRef.current) {
+      console.log('✅ Stopping polling - all sessions analyzed');
+      clearInterval(pollingRef.current);
+      pollingRef.current = null;
+    }
+
+    return () => {
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current);
+        pollingRef.current = null;
+      }
+    };
+  }, [sessionsData, currentStep, loadSessions]);
 
   const handleSubmitGoal = async (data: ResearchGoalForm) => {
     setIsGenerating(true);
@@ -740,6 +791,10 @@ export default function AdminDashboard() {
                           ? Object.entries(profile.traits)
                           : [];
 
+                        // Determine if analysis is complete
+                        const hasSummary = summaryRecord && summaryRecord.summary && summaryRecord.summary !== 'Summary not yet generated.';
+                        const hasPsychometricProfile = profile && traitEntries.length > 0;
+
                         const formatDateTime = (value?: string) => {
                           if (!value) return '—';
                           const date = new Date(value);
@@ -806,120 +861,133 @@ export default function AdminDashboard() {
                               </div>
                             </div>
 
-                            <div className="mt-6 grid gap-6 lg:grid-cols-2">
-                              <div>
-                                <h4 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-2">
-                                  Summary
-                                </h4>
-                                <p className="text-gray-700 leading-relaxed">{summaryText}</p>
+                            <div className="mt-6">
+                              {/* Show progress bar if analysis is not complete, otherwise show results */}
+                              {(!hasSummary || !hasPsychometricProfile) && status === 'completed' ? (
+                                <AnalysisProgressBar
+                                  sessionId={session.sessionId}
+                                  sessionStatus={status}
+                                  hasTranscript={transcriptCount > 0}
+                                  hasSummary={hasSummary}
+                                  hasPsychometricProfile={hasPsychometricProfile}
+                                />
+                              ) : (
+                                <div className="grid gap-6 lg:grid-cols-2">
+                                  <div>
+                                    <h4 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-2">
+                                      Summary
+                                    </h4>
+                                    <p className="text-gray-700 leading-relaxed">{summaryText}</p>
 
-                                {(keyThemes.length > 0 || keyInsights.length > 0) && (
-                                  <div className="mt-4 space-y-3">
-                                    {keyThemes.length > 0 && (
-                                      <div>
-                                        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">
-                                          Key Themes
-                                        </p>
-                                        <div className="flex flex-wrap gap-2">
-                                          {keyThemes.map((theme: string) => (
-                                            <span
-                                              key={theme}
-                                              className="inline-flex items-center px-3 py-1 rounded-full bg-gray-100 text-gray-700 text-xs font-medium"
-                                            >
-                                              {theme}
-                                            </span>
-                                          ))}
-                                        </div>
-                                      </div>
-                                    )}
-
-                                    {keyInsights.length > 0 && (
-                                      <div>
-                                        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">
-                                          Key Insights
-                                        </p>
-                                        <ul className="list-disc list-inside text-sm text-gray-700 space-y-1">
-                                          {keyInsights.map((insight: string, idx: number) => (
-                                            <li key={`${session.sessionId}-insight-${idx}`}>{insight}</li>
-                                          ))}
-                                        </ul>
-                                      </div>
-                                    )}
-                                  </div>
-                                )}
-                              </div>
-
-                              <div>
-                                <h4 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-2">
-                                  Psychometric Profile
-                                </h4>
-                                {profile && traitEntries.length > 0 ? (
-                                  <div className="space-y-3">
-                                    <div className="grid gap-3 sm:grid-cols-2">
-                                      {traitEntries.map(([trait, info]: [string, any]) => {
-                                        const rawScore = Number(info?.score ?? info ?? 0);
-                                        const score = Number.isFinite(rawScore) ? rawScore : 0;
-                                        const normalizedScore = Math.min(Math.max(score, 0), 100);
-                                        const explanation = info?.explanation || '';
-                                        return (
-                                          <div
-                                            key={`${session.sessionId}-${trait}`}
-                                            className="border border-gray-200 rounded-md p-3"
-                                          >
-                                            <div className="flex items-center justify-between mb-1">
-                                              <span className="text-sm font-medium text-gray-700 capitalize">
-                                                {trait}
-                                              </span>
-                                              <span className="text-sm font-semibold text-gray-900">
-                                                {Number.isFinite(score) ? Math.round(score) : '—'}
-                                              </span>
+                                    {(keyThemes.length > 0 || keyInsights.length > 0) && (
+                                      <div className="mt-4 space-y-3">
+                                        {keyThemes.length > 0 && (
+                                          <div>
+                                            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">
+                                              Key Themes
+                                            </p>
+                                            <div className="flex flex-wrap gap-2">
+                                              {keyThemes.map((theme: string) => (
+                                                <span
+                                                  key={theme}
+                                                  className="inline-flex items-center px-3 py-1 rounded-full bg-gray-100 text-gray-700 text-xs font-medium"
+                                                >
+                                                  {theme}
+                                                </span>
+                                              ))}
                                             </div>
-                                            <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
-                                              <div
-                                                className="h-full bg-blue-500 rounded-full transition-all"
-                                                style={{
-                                                  width: `${normalizedScore}%`
-                                                }}
-                                              />
-                                            </div>
-                                            {explanation && (
-                                              <p className="mt-2 text-xs text-gray-500 leading-snug">
-                                                {explanation}
-                                              </p>
-                                            )}
                                           </div>
-                                        );
-                                      })}
-                                    </div>
-                                    {profile?.overallProfile && (
-                                      <div className="border border-blue-100 bg-blue-50 text-blue-900 rounded-md p-3 text-sm">
-                                        <p className="font-semibold text-blue-800 mb-1">
-                                          Overall Profile
-                                        </p>
-                                        <p className="leading-relaxed">{profile.overallProfile}</p>
-                                      </div>
-                                    )}
-                                    {profile?.keyInsights && Array.isArray(profile.keyInsights) && profile.keyInsights.length > 0 && (
-                                      <div>
-                                        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">
-                                          Personality Insights
-                                        </p>
-                                        <ul className="list-disc list-inside text-sm text-gray-700 space-y-1">
-                                          {profile.keyInsights.map((insight: string, idx: number) => (
-                                            <li key={`${session.sessionId}-profile-insight-${idx}`}>
-                                              {insight}
-                                            </li>
-                                          ))}
-                                        </ul>
+                                        )}
+
+                                        {keyInsights.length > 0 && (
+                                          <div>
+                                            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">
+                                              Key Insights
+                                            </p>
+                                            <ul className="list-disc list-inside text-sm text-gray-700 space-y-1">
+                                              {keyInsights.map((insight: string, idx: number) => (
+                                                <li key={`${session.sessionId}-insight-${idx}`}>{insight}</li>
+                                              ))}
+                                            </ul>
+                                          </div>
+                                        )}
                                       </div>
                                     )}
                                   </div>
-                                ) : (
-                                  <div className="border border-dashed border-gray-200 rounded-md p-4 text-sm text-gray-500">
-                                    Psychometric analysis is not yet available for this session.
+
+                                  <div>
+                                    <h4 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-2">
+                                      Psychometric Profile
+                                    </h4>
+                                    {profile && traitEntries.length > 0 ? (
+                                      <div className="space-y-3">
+                                        <div className="grid gap-3 sm:grid-cols-2">
+                                          {traitEntries.map(([trait, info]: [string, any]) => {
+                                            const rawScore = Number(info?.score ?? info ?? 0);
+                                            const score = Number.isFinite(rawScore) ? rawScore : 0;
+                                            const normalizedScore = Math.min(Math.max(score, 0), 100);
+                                            const explanation = info?.explanation || '';
+                                            return (
+                                              <div
+                                                key={`${session.sessionId}-${trait}`}
+                                                className="border border-gray-200 rounded-md p-3"
+                                              >
+                                                <div className="flex items-center justify-between mb-1">
+                                                  <span className="text-sm font-medium text-gray-700 capitalize">
+                                                    {trait}
+                                                  </span>
+                                                  <span className="text-sm font-semibold text-gray-900">
+                                                    {Number.isFinite(score) ? Math.round(score) : '—'}
+                                                  </span>
+                                                </div>
+                                                <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                                                  <div
+                                                    className="h-full bg-blue-500 rounded-full transition-all"
+                                                    style={{
+                                                      width: `${normalizedScore}%`
+                                                    }}
+                                                  />
+                                                </div>
+                                                {explanation && (
+                                                  <p className="mt-2 text-xs text-gray-500 leading-snug">
+                                                    {explanation}
+                                                  </p>
+                                                )}
+                                              </div>
+                                            );
+                                          })}
+                                        </div>
+                                        {profile?.overallProfile && (
+                                          <div className="border border-blue-100 bg-blue-50 text-blue-900 rounded-md p-3 text-sm">
+                                            <p className="font-semibold text-blue-800 mb-1">
+                                              Overall Profile
+                                            </p>
+                                            <p className="leading-relaxed">{profile.overallProfile}</p>
+                                          </div>
+                                        )}
+                                        {profile?.keyInsights && Array.isArray(profile.keyInsights) && profile.keyInsights.length > 0 && (
+                                          <div>
+                                            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">
+                                              Personality Insights
+                                            </p>
+                                            <ul className="list-disc list-inside text-sm text-gray-700 space-y-1">
+                                              {profile.keyInsights.map((insight: string, idx: number) => (
+                                                <li key={`${session.sessionId}-profile-insight-${idx}`}>
+                                                  {insight}
+                                                </li>
+                                              ))}
+                                            </ul>
+                                          </div>
+                                        )}
+                                      </div>
+                                    ) : (
+                                      <div className="border border-dashed border-gray-200 rounded-md p-4 text-sm text-gray-500">
+                                        Psychometric analysis is not yet available for this session.
+                                      </div>
+                                    )}
                                   </div>
-                                )}
-                              </div>
+                                </div>
+                              )}
                             </div>
                           </div>
                         );

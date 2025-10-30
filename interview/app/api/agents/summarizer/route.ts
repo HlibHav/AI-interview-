@@ -3,6 +3,7 @@ import OpenAI from 'openai';
 import {
   fetchInterviewSession,
   fetchTranscriptDocument,
+  fetchTranscriptChunks,
   normalizeTranscriptEntries,
   renderTranscriptText
 } from '@/lib/weaviate/weaviate-session';
@@ -13,10 +14,12 @@ const openai = process.env.OPENAI_API_KEY
 
 type SummarizerRequestBody = {
   transcript?: any;
+  newEntries?: any;
   researchGoal?: string;
   sessionContext?: Record<string, any>;
   sessionUuid?: string;
   sessionId?: string;
+  existingSummary?: any;
 };
 
 function buildSessionContextSummary(context: Record<string, any> | undefined) {
@@ -57,16 +60,35 @@ export async function POST(request: NextRequest) {
 
     let researchGoal = body.researchGoal;
     let transcriptEntries = normalizeTranscriptEntries(body.transcript);
+    const deltaEntries = normalizeTranscriptEntries(body.newEntries);
+    const existingSummary = body.existingSummary;
+    const hasDeltaEntries = deltaEntries.length > 0;
+    let incrementalMode = false;
 
     const sessionRecord = await fetchInterviewSession(sessionId);
     if (sessionRecord) {
       researchGoal = researchGoal || sessionRecord.researchGoal || '';
+      if (transcriptEntries.length === 0) {
+        transcriptEntries = normalizeTranscriptEntries(sessionRecord.transcript);
+      }
     }
 
     if (transcriptEntries.length === 0) {
       const transcriptDocument = await fetchTranscriptDocument(sessionId);
       if (transcriptDocument) {
         transcriptEntries = transcriptDocument.entries;
+      }
+    }
+
+    if (transcriptEntries.length === 0 && hasDeltaEntries) {
+      incrementalMode = true;
+      transcriptEntries = deltaEntries;
+    }
+
+    if (transcriptEntries.length === 0) {
+      const chunkEntries = await fetchTranscriptChunks(sessionId);
+      if (chunkEntries.length > 0) {
+        transcriptEntries = chunkEntries;
       }
     }
 
@@ -77,7 +99,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const transcriptText = renderTranscriptText(transcriptEntries);
+    let transcriptText = renderTranscriptText(transcriptEntries);
+    const deltaTranscriptText = hasDeltaEntries ? renderTranscriptText(deltaEntries) : '';
+
     const sessionContext = {
       ...buildSessionContextSummary(body.sessionContext),
       targetAudience: body.sessionContext?.targetAudience || sessionRecord?.targetAudience || '',
@@ -102,13 +126,7 @@ export async function POST(request: NextRequest) {
 - Extract 3–5 key themes as short phrases.
 - If the transcript mentions no meaningful content, say so explicitly.`;
 
-    const userPrompt = `Research Goal: ${researchGoal || 'not provided'}
-Session Context: ${JSON.stringify(sessionContext, null, 2)}
-
-Full Transcript:
-${transcriptText}
-
-Please respond with valid JSON in the following shape:
+    const summaryInstructions = `Please respond with valid JSON in the following shape:
 {
   "summary": "string",
   "keyThemes": ["theme1", "..."],
@@ -117,6 +135,25 @@ Please respond with valid JSON in the following shape:
   "emotionalTone": "string",
   "insights": ["insight1", "..."]
 }`;
+
+    const userPrompt = incrementalMode && existingSummary
+      ? `Research Goal: ${researchGoal || 'not provided'}
+Session Context: ${JSON.stringify(sessionContext, null, 2)}
+
+Existing Summary JSON:
+${JSON.stringify(existingSummary, null, 2)}
+
+New Transcript Segment:
+${deltaTranscriptText || transcriptText}
+
+Update the existing summary so it reflects the entire conversation (previous exchanges plus this new segment). Reassess key themes, insights, sentiment, keywords, and emotional tone. ${summaryInstructions}`
+      : `Research Goal: ${researchGoal || 'not provided'}
+Session Context: ${JSON.stringify(sessionContext, null, 2)}
+
+Full Transcript:
+${transcriptText}
+
+${summaryInstructions}`;
 
     const completion = await openai.chat.completions.create({
       model: process.env.OPENAI_SUMMARIZER_MODEL || 'gpt-4o-mini',

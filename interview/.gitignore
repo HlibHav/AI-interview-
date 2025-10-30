@@ -86,3 +86,11 @@ azure-credentials.json
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Explicit allows for examples (do not ignore these)
+!**/env.example
+
+# Additional secret locations
+.secrets/
+.envrc
+.npmrc
