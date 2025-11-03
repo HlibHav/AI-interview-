@@ -2,6 +2,7 @@ import { v5 as uuidv5 } from 'uuid';
 import {
   createObjectWithReferences,
   ensureSchemaClass,
+  ensureSchemaProperty,
   getWeaviateClient,
   updateObjectWithReferences
 } from './weaviate-helpers';
@@ -9,6 +10,20 @@ import { canonicalizeGoalId } from './weaviate-utils';
 import { ReferenceValue } from './weaviate-reference-utils';
 
 export type KeyTheme = { theme: string; count: number };
+
+export type PersonalityTrait = {
+  name: string;
+  score: number;
+  descriptor?: string;
+};
+
+export type PersonalityProfile = {
+  summary: string;
+  traits: PersonalityTrait[];
+  sentiment?: 'positive' | 'neutral' | 'negative';
+  method?: 'llm' | 'heuristic';
+  generatedAt?: string;
+};
 
 export type BatchSummaryRecord = {
   id: string;
@@ -26,7 +41,51 @@ export type BatchSummaryRecord = {
   updatedAt?: string;
   researchGoalObjectId?: string;
   sessionObjectIds?: string[];
+  personalityProfile?: PersonalityProfile;
 };
+
+const BATCH_SUMMARY_CLASS = 'BatchSummary';
+const PERSONALITY_PROPERTY = { name: 'personalityProfileJson', dataType: ['text'] };
+
+function buildBatchSummaryFields(includePersonality: boolean): string {
+  return `
+        researchGoalId
+        interviewIds
+        keyThemesJson
+        summary
+        overallProfile
+        insights
+        pains
+        gains
+        jobs
+        ${includePersonality ? 'personalityProfileJson' : ''}
+        participantCount
+        createdAt
+        updatedAt
+        _additional { id }
+      `;
+}
+
+function isMissingPersonalityFieldError(error: unknown): boolean {
+  const message =
+    typeof (error as any)?.message === 'string'
+      ? (error as any).message
+      : (error as any)?.response?.errors?.[0]?.message;
+  return typeof message === 'string' && message.includes('personalityProfileJson');
+}
+
+export async function ensureBatchSummaryPersonalityProperty() {
+  try {
+    await ensureSchemaClass(BATCH_SUMMARY_CLASS);
+  } catch {
+    // ignore errors from ensureClass; follow-up ensureSchemaProperty will no-op if class missing
+  }
+  try {
+    await ensureSchemaProperty(BATCH_SUMMARY_CLASS, PERSONALITY_PROPERTY);
+  } catch (error) {
+    console.warn('[WEAVIATE] Failed to ensure BatchSummary.personalityProfileJson property', error);
+  }
+}
 
 export type BatchSummaryListItem = BatchSummaryRecord & {
   hasSummary: boolean;
@@ -396,12 +455,75 @@ function parseKeyThemesJson(json: any): KeyTheme[] {
   }
 }
 
+function toPersonalityProfileJson(profile?: PersonalityProfile): string | undefined {
+  if (!profile) return undefined;
+  try {
+    return JSON.stringify(profile);
+  } catch {
+    return undefined;
+  }
+}
+
+function parsePersonalityProfileJson(value: unknown): PersonalityProfile | undefined {
+  if (!value) return undefined;
+  let payload: any = value;
+  if (typeof value === 'string') {
+    try {
+      payload = JSON.parse(value);
+    } catch {
+      return undefined;
+    }
+  }
+  if (typeof payload !== 'object' || payload === null) {
+    return undefined;
+  }
+  const summary = typeof payload.summary === 'string' ? payload.summary : '';
+  const sentiment =
+    payload.sentiment === 'positive' || payload.sentiment === 'neutral' || payload.sentiment === 'negative'
+      ? payload.sentiment
+      : undefined;
+  const method =
+    payload.method === 'llm' || payload.method === 'heuristic'
+      ? payload.method
+      : undefined;
+  const generatedAt = typeof payload.generatedAt === 'string' ? payload.generatedAt : undefined;
+
+  const traits: PersonalityTrait[] = Array.isArray(payload.traits)
+    ? payload.traits
+        .map((item: any): PersonalityTrait | undefined => {
+          const name = typeof item?.name === 'string' ? item.name : undefined;
+          const score =
+            typeof item?.score === 'number' && Number.isFinite(item.score)
+              ? item.score
+              : undefined;
+          if (!name || score === undefined) {
+            return undefined;
+          }
+          const descriptor = typeof item?.descriptor === 'string' ? item.descriptor : undefined;
+          return { name, score, descriptor };
+        })
+        .filter((item: PersonalityTrait | undefined): item is PersonalityTrait => Boolean(item))
+    : [];
+
+  if (traits.length === 0 && !summary) {
+    return undefined;
+  }
+
+  return {
+    summary,
+    traits,
+    sentiment,
+    method,
+    generatedAt,
+  };
+}
+
 export async function upsertBatchSummary(data: BatchSummaryRecord): Promise<string> {
   const client = getWeaviateClient();
 
   // Ensure class exists
   try {
-    await ensureSchemaClass('BatchSummary');
+    await ensureBatchSummaryPersonalityProperty();
   } catch (e) {
     // Non-fatal if already exists
   }
@@ -423,6 +545,10 @@ export async function upsertBatchSummary(data: BatchSummaryRecord): Promise<stri
     createdAt: data.createdAt || nowIso,
     updatedAt: nowIso
   };
+  const profileJson = toPersonalityProfileJson(data.personalityProfile);
+  if (profileJson) {
+    payload.personalityProfileJson = profileJson;
+  }
 
   const references: Record<string, ReferenceValue> | undefined = (() => {
     const ref: Record<string, ReferenceValue> = {};
@@ -462,7 +588,7 @@ export async function fetchBatchSummary(researchGoalId: string) {
     
     // Ensure class exists first
     try {
-      await ensureSchemaClass('BatchSummary');
+      await ensureBatchSummaryPersonalityProperty();
     } catch (e) {
       // Class doesn't exist yet
       return null;
@@ -471,21 +597,7 @@ export async function fetchBatchSummary(researchGoalId: string) {
     const result = await client.graphql
       .get()
       .withClassName('BatchSummary')
-      .withFields(`
-        researchGoalId
-        interviewIds
-        keyThemesJson
-        summary
-        overallProfile
-        insights
-        pains
-        gains
-        jobs
-        participantCount
-        createdAt
-        updatedAt
-        _additional { id }
-      `)
+      .withFields(buildBatchSummaryFields(true))
       .withWhere({ path: ['researchGoalId'], operator: 'Equal', valueText: researchGoalId })
       .withLimit(1)
       .do();
@@ -506,9 +618,41 @@ export async function fetchBatchSummary(researchGoalId: string) {
       jobs: raw.jobs || [],
       participantCount: raw.participantCount || (raw.interviewIds?.length || 0),
       createdAt: raw.createdAt,
-      updatedAt: raw.updatedAt
+      updatedAt: raw.updatedAt,
+      personalityProfile: parsePersonalityProfileJson(raw.personalityProfileJson),
     } as BatchSummaryRecord;
   } catch (error) {
+    if (isMissingPersonalityFieldError(error)) {
+      console.warn('[BATCH SUMMARY] personalityProfileJson field missing during fetch; retrying without it');
+      const client = getWeaviateClient();
+      const result = await client.graphql
+        .get()
+        .withClassName('BatchSummary')
+        .withFields(buildBatchSummaryFields(false))
+        .withWhere({ path: ['researchGoalId'], operator: 'Equal', valueText: researchGoalId })
+        .withLimit(1)
+        .do();
+
+      const raw = result?.data?.Get?.BatchSummary?.[0];
+      if (!raw) return null;
+
+      return {
+        id: raw?._additional?.id || '',
+        researchGoalId: raw.researchGoalId || researchGoalId,
+        interviewIds: raw.interviewIds || [],
+        keyThemes: parseKeyThemesJson(raw.keyThemesJson),
+        summary: raw.summary || '',
+        overallProfile: raw.overallProfile || '',
+        insights: raw.insights || [],
+        pains: raw.pains || [],
+        gains: raw.gains || [],
+        jobs: raw.jobs || [],
+        participantCount: raw.participantCount || (raw.interviewIds?.length || 0),
+        createdAt: raw.createdAt,
+        updatedAt: raw.updatedAt,
+        personalityProfile: undefined,
+      } as BatchSummaryRecord;
+    }
     console.error('[BATCH SUMMARY] Error fetching batch summary:', error);
     return null;
   }
@@ -520,36 +664,37 @@ export async function listBatchSummaries(limit = 50) {
     
     // Ensure class exists first
     try {
-      await ensureSchemaClass('BatchSummary');
+      await ensureBatchSummaryPersonalityProperty();
     } catch (e) {
       // Class might not exist yet, that's okay - return empty list
       console.log('[BATCH SUMMARY] BatchSummary class does not exist yet, returning empty list');
       return [];
     }
 
-    const result = await client.graphql
-      .get()
-      .withClassName('BatchSummary')
-      .withFields(`
-        researchGoalId
-        interviewIds
-        keyThemesJson
-        summary
-        overallProfile
-        insights
-        pains
-        gains
-        jobs
-        participantCount
-        createdAt
-        updatedAt
-        _additional { id }
-      `)
-      .withLimit(limit)
-      .withSort([{ path: ['updatedAt'], order: 'desc' }])
-      .do();
+    const runQuery = async (includePersonality: boolean) =>
+      client.graphql
+        .get()
+        .withClassName('BatchSummary')
+        .withFields(buildBatchSummaryFields(includePersonality))
+        .withLimit(limit)
+        .withSort([{ path: ['updatedAt'], order: 'desc' }])
+        .do();
 
-    const rows: any[] = result?.data?.Get?.BatchSummary || [];
+    let queryResult: any;
+    let includePersonality = true;
+    try {
+      queryResult = await runQuery(true);
+    } catch (error) {
+      if (!isMissingPersonalityFieldError(error)) {
+        throw error;
+      }
+      includePersonality = false;
+      console.warn('[BATCH SUMMARY] personalityProfileJson field missing during list; retrying without it');
+      await ensureBatchSummaryPersonalityProperty();
+      queryResult = await runQuery(false);
+    }
+
+    const rows: any[] = queryResult?.data?.Get?.BatchSummary || [];
     return rows.map((raw) => ({
       id: raw?._additional?.id || '',
       researchGoalId: raw?.researchGoalId || '',
@@ -564,6 +709,9 @@ export async function listBatchSummaries(limit = 50) {
       participantCount: raw?.participantCount || (raw?.interviewIds?.length || 0),
       createdAt: raw?.createdAt || undefined,
       updatedAt: raw?.updatedAt || undefined,
+      personalityProfile: includePersonality
+        ? parsePersonalityProfileJson(raw?.personalityProfileJson)
+        : undefined,
     }));
   } catch (error) {
     console.error('[BATCH SUMMARY] Error listing batches:', error);

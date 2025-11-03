@@ -242,6 +242,11 @@ export default function BatchSummaryPage() {
     );
 
     const topThemes = keyThemes.slice(0, 3);
+    const maxThemeCount =
+      keyThemes.reduce((max, theme) => {
+        const count = typeof theme.count === 'number' ? theme.count : 0;
+        return count > max ? count : max;
+      }, 0) || 0;
     const statusLabel = hasSummary ? 'Summary ready' : 'Needs generation';
     const statusStyles = hasSummary
       ? 'bg-green-100 text-green-800 border-green-200'
@@ -275,7 +280,11 @@ export default function BatchSummaryPage() {
                   topThemes.map((t, idx) => (
                     <span
                       key={`${t.theme}-${idx}`}
-                      className="inline-flex items-center px-2 py-1 rounded-full text-xs border bg-gray-100 border-gray-200 text-gray-700"
+                      className={`inline-flex items-center px-2 py-1 rounded-full text-xs border ${
+                        t.count === maxThemeCount && maxThemeCount > 0
+                          ? 'bg-yellow-100 border-yellow-300 text-yellow-900'
+                          : 'bg-gray-100 border-gray-200 text-gray-700'
+                      }`}
                     >
                       {t.theme} ({t.count})
                     </span>
@@ -334,11 +343,11 @@ export default function BatchSummaryPage() {
                           <span
                             key={`${t.theme}-${idx}`}
                             className={`inline-flex items-center px-2 py-1 rounded-full text-xs border ${
-                              idx < 3
+                              t.count === maxThemeCount && maxThemeCount > 0
                                 ? 'bg-yellow-100 border-yellow-300 text-yellow-900'
                                 : 'bg-gray-100 border-gray-300 text-gray-800'
                             }`}
-                            title={`${t.count} mentions`}
+                            title={`${t.count} ${t.count === 1 ? 'mention' : 'mentions'}`}
                           >
                             {t.theme} ({t.count})
                           </span>
@@ -388,16 +397,8 @@ export default function BatchSummaryPage() {
                   </div>
                 </>
               ) : (
-                <div className="lg:col-span-2 rounded-md border border-dashed border-blue-200 bg-blue-50 p-4">
-                  <p className="text-sm text-blue-800">
-                    A batch summary has not been generated for this research goal yet. Refresh to create one.
-                  </p>
-                  <button
-                    onClick={onRefresh}
-                    className="mt-3 inline-flex items-center px-3 py-1.5 text-xs rounded border border-blue-400 text-blue-700 hover:bg-blue-50"
-                  >
-                    Refresh summary
-                  </button>
+                <div className="col-span-full text-sm text-gray-500 italic">
+                  Summary has not been generated yet.
                 </div>
               )}
             </div>

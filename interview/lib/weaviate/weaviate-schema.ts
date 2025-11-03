@@ -174,7 +174,8 @@ export const schemaClasses: SchemaClassDefinition[] = [
       { name: 'insights', dataType: ['text[]'] },
       { name: 'pains', dataType: ['text[]'] },
       { name: 'gains', dataType: ['text[]'] },
-      { name: 'jobs', dataType: ['text[]'] }
+      { name: 'jobs', dataType: ['text[]'] },
+      { name: 'personalityProfileJson', dataType: ['text'] }
     ],
     references: [
       { name: 'researchGoal', targetClass: 'ResearchGoal' },
