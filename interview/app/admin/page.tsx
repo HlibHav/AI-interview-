@@ -38,6 +38,9 @@ export default function AdminDashboard() {
   const [isLoadingSessions, setIsLoadingSessions] = useState(false);
   const [sessionsError, setSessionsError] = useState<string | null>(null);
   const pollingRef = React.useRef<NodeJS.Timeout | null>(null);
+  const [sessionFilter, setSessionFilter] = useState<'all' | 'completed' | 'in_progress' | 'created'>('all');
+  const [sessionQuery, setSessionQuery] = useState('');
+  const [expandedSessionId, setExpandedSessionId] = useState<string | null>(null);
 
   const form = useForm<ResearchGoalForm>({
     resolver: zodResolver(researchGoalSchema),
@@ -371,6 +374,7 @@ export default function AdminDashboard() {
     { id: "script", label: "Interview Script", icon: FileText },
     { id: "sessions", label: "Sessions", icon: Users },
     { id: "analytics", label: "Analytics", icon: BarChart3, href: "/admin/analytics" },
+    { id: "batch-summary", label: "Batch Summary", icon: BarChart3, href: "/admin/batch-summary" },
   ];
 
   return (
@@ -713,17 +717,42 @@ export default function AdminDashboard() {
                       Review completed interviews, their summaries, and psychometric insights.
                     </p>
                   </div>
-                  <div className="flex items-center gap-3">
-                    <span className="text-sm text-gray-500">
-                      Showing {sessionsData.length} session{sessionsData.length === 1 ? '' : 's'}
-                    </span>
-                    <button
-                      onClick={() => loadSessions().catch(() => null)}
-                      disabled={isLoadingSessions}
-                      className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      {isLoadingSessions ? 'Refreshing…' : 'Refresh'}
-                    </button>
+                  <div className="flex flex-col md:flex-row gap-3 md:items-center">
+                    <div className="flex rounded-md border border-gray-300 overflow-hidden">
+                      {([
+                        { id: 'all', label: 'All' },
+                        { id: 'completed', label: 'Completed' },
+                        { id: 'in_progress', label: 'In Progress' },
+                        { id: 'created', label: 'Created' },
+                      ] as const).map(tab => (
+                        <button
+                          key={tab.id}
+                          onClick={() => setSessionFilter(tab.id)}
+                          className={`px-3 py-1.5 text-sm font-medium transition-colors ${
+                            sessionFilter === tab.id
+                              ? 'bg-gray-100 text-gray-900'
+                              : 'bg-white text-gray-600 hover:bg-gray-50'
+                          }`}
+                        >
+                          {tab.label}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input
+                        value={sessionQuery}
+                        onChange={(e) => setSessionQuery(e.target.value)}
+                        placeholder="Search by goal or session ID…"
+                        className="w-full md:w-64 px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      />
+                      <button
+                        onClick={() => loadSessions().catch(() => null)}
+                        disabled={isLoadingSessions}
+                        className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {isLoadingSessions ? 'Refreshing…' : 'Refresh'}
+                      </button>
+                    </div>
                   </div>
                 </div>
 
@@ -750,6 +779,19 @@ export default function AdminDashboard() {
                     {sessionsData
                       .slice()
                       .filter((session) => !!session)
+                      .filter((session) => {
+                        if (sessionFilter === 'all') return true;
+                        const status = session.status || 'created';
+                        return status === sessionFilter;
+                      })
+                      .filter((session) => {
+                        const q = sessionQuery.trim().toLowerCase();
+                        if (!q) return true;
+                        return (
+                          (session.researchGoal || '').toLowerCase().includes(q) ||
+                          (session.sessionId || '').toLowerCase().includes(q)
+                        );
+                      })
                       .sort(
                         (a, b) =>
                           new Date(b.updatedAt || b.createdAt || 0).getTime() -
@@ -807,6 +849,7 @@ export default function AdminDashboard() {
                           });
                         };
 
+                        const isExpanded = expandedSessionId === session.sessionId;
                         return (
                           <div
                             key={session.sessionId}
@@ -858,10 +901,16 @@ export default function AdminDashboard() {
                                   <span className="font-medium text-gray-700">Completed:</span>{' '}
                                   {formatDateTime(session.endTime)}
                                 </p>
+                                <button
+                                  onClick={() => setExpandedSessionId(isExpanded ? null : session.sessionId)}
+                                  className="mt-2 inline-flex items-center text-blue-600 hover:text-blue-700"
+                                >
+                                  {isExpanded ? 'Hide details' : 'View details'}
+                                </button>
                               </div>
                             </div>
 
-                            <div className="mt-6">
+                            <div className={`mt-6 ${isExpanded ? '' : 'hidden'}`}>
                               {/* Show progress bar if analysis is not complete, otherwise show results */}
                               {(!hasSummary || !hasPsychometricProfile) && status === 'completed' ? (
                                 <AnalysisProgressBar

@@ -22,6 +22,13 @@ const nextConfig = {
         { stream: 'commonjs stream' }
       );
     }
+    if (!isServer) {
+      config.resolve = config.resolve || {};
+      config.resolve.alias = {
+        ...(config.resolve.alias || {}),
+        'require-in-the-middle': false,
+      };
+    }
     return config;
   },
 };

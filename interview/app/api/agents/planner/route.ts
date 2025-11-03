@@ -6,6 +6,7 @@ import {
   trace,
 } from '@opentelemetry/api';
 import OpenAI from 'openai';
+import { createQuestionPlan } from '@/lib/weaviate/weaviate-question-plan';
 
 const OPENAI_PLANNER_MODEL =
   process.env.OPENAI_PLANNER_MODEL?.trim() || 'gpt-4o-mini';
@@ -107,51 +108,6 @@ function getModelPricing(model: string) {
     default:
       return { prompt: 0.03, completion: 0.06 };
   }
-}
-
-// Helper function to call Weaviate API
-async function callWeaviateAPI(action: string, className: string, data: any) {
-  return tracer.startActiveSpan(
-    'planner.weaviate.request',
-    { kind: SpanKind.CLIENT },
-    async (span) => {
-      span.setAttribute('weaviate.action', action);
-      span.setAttribute('weaviate.class_name', className);
-      try {
-        const response = await fetch(
-          `${
-            process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'
-          }/api/weaviate`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action, className, data }),
-          }
-        );
-
-        span.setAttribute('http.status_code', response.status);
-
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-        }
-
-        const json = await response.json();
-        span.setStatus({ code: SpanStatusCode.OK });
-        return json;
-      } catch (error) {
-        span.recordException(error as Error);
-        span.setStatus({
-          code: SpanStatusCode.ERROR,
-          message:
-            error instanceof Error ? error.message : 'Weaviate API error',
-        });
-        console.error(`Weaviate API call error for ${action}:`, error);
-        throw error;
-      } finally {
-        span.end();
-      }
-    }
-  );
 }
 
 export async function POST(request: NextRequest) {
@@ -353,17 +309,17 @@ Brief: ${brief ?? ''}${footer}`;
 
       // Store question plan in Weaviate with cross-reference to research goal (async)
       const questionPlanData = {
-        researchGoalId: researchGoalUuid,
+        researchGoal: researchGoal ?? researchGoalUuid ?? '',
         introduction: script.introduction,
         questions: script.questions?.map((q: any) => q.text) || [],
-        followUps: JSON.stringify(script.followUps || {}),
+        followUps: script.followUps || {},
         createdAt: new Date().toISOString(),
       };
 
-      void callWeaviateAPI('store', 'QuestionPlan', questionPlanData)
-        .then((result) => {
+      void createQuestionPlan(questionPlanData)
+        .then(() => {
           span.addEvent('planner.weaviate.store.completed', {
-            questionPlanUuid: result.id ?? '',
+            questionPlanUuid: '',
           });
         })
         .catch((error) => {

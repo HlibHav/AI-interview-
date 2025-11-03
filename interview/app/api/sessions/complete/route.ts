@@ -5,6 +5,7 @@ import {
   upsertTranscriptDocument,
   fetchInterviewSession
 } from '@/lib/weaviate/weaviate-session';
+import { computeAndPersistBatchSummary } from '@/lib/aggregations/batchSummary';
 
 // Global session storage declaration
 declare global {
@@ -188,6 +189,28 @@ export async function POST(request: NextRequest) {
       }
 
       console.log('✅ [SESSION COMPLETE] Session stored in Weaviate successfully');
+
+      const goalForBatch = (updatedSession.researchGoal || '').trim();
+      if (goalForBatch) {
+        try {
+          const batch = await computeAndPersistBatchSummary(goalForBatch);
+          if (batch) {
+            console.log('✅ [SESSION COMPLETE] Batch summary updated', {
+              researchGoalId: goalForBatch,
+              interviewCount: batch.interviewIds.length
+            });
+          } else {
+            console.log('ℹ️ [SESSION COMPLETE] Batch summary skipped (no completed interviews)', {
+              researchGoalId: goalForBatch
+            });
+          }
+        } catch (batchError) {
+          console.error('⚠️ [SESSION COMPLETE] Failed to compute batch summary', {
+            researchGoalId: goalForBatch,
+            error: batchError instanceof Error ? batchError.message : batchError
+          });
+        }
+      }
 
     } catch (weaviateError) {
       console.error('⚠️ [SESSION COMPLETE] Failed to store in Weaviate:', weaviateError);

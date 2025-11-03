@@ -91,7 +91,7 @@ function RespondentInterfaceContent() {
     return (
       <SimpleBPInterviewRoom
         sessionId={sessionId}
-        participantEmail={`anonymous-${sessionId.slice(0, 8)}@interview.local`}
+        participantEmail={`anonymous-${(sessionId || '').slice(0, 8)}@interview.local`}
         researchGoal={session?.researchGoal}
         interviewScript={session?.script}
         onDisconnect={handleDisconnect}

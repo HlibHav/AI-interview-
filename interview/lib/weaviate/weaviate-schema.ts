@@ -163,11 +163,32 @@ export const schemaClasses: SchemaClassDefinition[] = [
       { name: 'aggregatedInsights', dataType: ['text'] },
       { name: 'participantCount', dataType: ['int'] },
       { name: 'createdAt', dataType: ['date'] },
-      { name: 'updatedAt', dataType: ['date'] }
+      { name: 'updatedAt', dataType: ['date'] },
+      // Additional fields for richer batch summaries
+      { name: 'researchGoalId', dataType: ['text'] },
+      { name: 'interviewIds', dataType: ['text[]'] },
+      // JSON string of [{ theme: string; count: number }]
+      { name: 'keyThemesJson', dataType: ['text'] },
+      { name: 'summary', dataType: ['text'] },
+      { name: 'overallProfile', dataType: ['text'] },
+      { name: 'insights', dataType: ['text[]'] },
+      { name: 'pains', dataType: ['text[]'] },
+      { name: 'gains', dataType: ['text[]'] },
+      { name: 'jobs', dataType: ['text[]'] }
     ],
     references: [
       { name: 'researchGoal', targetClass: 'ResearchGoal' },
       { name: 'sessions', targetClass: 'InterviewSession' }
+    ]
+  },
+  {
+    class: 'BatchSummaryTombstone',
+    description: 'Tombstones that record manual batch summary deletions to prevent auto-regeneration',
+    properties: [
+      { name: 'researchGoalCanonical', dataType: ['text'] },
+      { name: 'researchGoalLabel', dataType: ['text'] },
+      { name: 'deletedAt', dataType: ['date'] },
+      { name: 'lastSessionUpdatedAt', dataType: ['date'] }
     ]
   }
 ];

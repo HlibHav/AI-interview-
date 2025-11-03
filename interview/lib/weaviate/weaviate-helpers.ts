@@ -291,12 +291,12 @@ async function findReferencingObjects(targetClassName: string, targetUuid: strin
   const referenceMap: Record<string, string[]> = {
     ResearchGoal: ['QuestionPlan', 'InterviewSession', 'BatchSummary'],
     QuestionPlan: ['InterviewSession'],
-    InterviewSession: ['TranscriptChunk', 'PsychometricProfile', 'BatchSummary', 'Annotation', 'TranscriptDocument'],
+    InterviewSession: ['TranscriptChunk', 'PsychometricProfile', 'Annotation', 'TranscriptDocument', 'BatchSummary'],
+    BatchSummary: [],
     TranscriptChunk: ['Annotation'],
     TranscriptDocument: [],
-    PsychometricProfile: [],
-    BatchSummary: [],
-    Annotation: []
+    Annotation: [],
+    PsychometricProfile: []
   };
 
   const referencingClasses = Object.entries(referenceMap)
@@ -304,26 +304,34 @@ async function findReferencingObjects(targetClassName: string, targetUuid: strin
     .map(([className]) => className);
 
   for (const className of referencingClasses) {
-    const result = await weaviateClient.graphql
-      .get()
-      .withClassName(className)
-      .withFields(`
-        _additional { id }
-        ... on ${className} { * }
-      `)
-      .withWhere({
-        path: [referencePropertyForClass(className, targetClassName)],
-        operator: 'Equal',
-        valueText: targetUuid
-      })
-      .do();
+    const property = referencePropertyForClass(className, targetClassName);
+    if (!property) {
+      console.warn(`[WEAVIATE] Reference property not found for ${className} -> ${targetClassName}, skipping cascade delete lookup`);
+      continue;
+    }
 
-    const objects = result.data?.Get?.[className] || [];
-    for (const obj of objects) {
-      const id = obj._additional?.id;
-      if (id) {
-        referencingObjects.push({ className, id });
+    try {
+      const result = await weaviateClient.graphql
+        .get()
+        .withClassName(className)
+        .withFields('_additional { id }')
+        .withWhere({
+          path: [property],
+          operator: 'Equal',
+          valueText: targetUuid
+        })
+        .withLimit(200)
+        .do();
+
+      const objects = result.data?.Get?.[className] || [];
+      for (const obj of objects) {
+        const id = obj._additional?.id;
+        if (id) {
+          referencingObjects.push({ className, id });
+        }
       }
+    } catch (error) {
+      console.warn(`[WEAVIATE] Failed to lookup references for ${className} -> ${targetClassName}:`, error);
     }
   }
 
@@ -332,16 +340,17 @@ async function findReferencingObjects(targetClassName: string, targetUuid: strin
 
 function referencePropertyForClass(className: string, targetClassName: string) {
   const referenceMap: Record<string, Record<string, string>> = {
+    ResearchGoal: {},
     QuestionPlan: { ResearchGoal: 'researchGoal' },
     InterviewSession: { ResearchGoal: 'researchGoal' },
+    BatchSummary: { ResearchGoal: 'researchGoal', InterviewSession: 'sessions' },
     TranscriptChunk: { InterviewSession: 'session' },
     TranscriptDocument: { InterviewSession: 'session' },
     Annotation: { InterviewSession: 'session', TranscriptChunk: 'chunk' },
-    PsychometricProfile: { InterviewSession: 'session' },
-    BatchSummary: { ResearchGoal: 'researchGoal', InterviewSession: 'sessions' }
+    PsychometricProfile: { InterviewSession: 'session' }
   };
 
-  return referenceMap[className]?.[targetClassName] || 'session';
+  return referenceMap[className]?.[targetClassName];
 }
 
 export async function callWeaviateAPI(action: string, className: string, data: any) {

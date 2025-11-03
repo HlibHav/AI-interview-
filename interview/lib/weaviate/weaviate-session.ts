@@ -4,7 +4,8 @@ import {
   ensureSchemaClass,
   ensureSchemaReference,
   getWeaviateClient,
-  updateObjectWithReferences
+  updateObjectWithReferences,
+  deleteObjectCascade
 } from './weaviate-helpers';
 import { generateEmbeddingForChunk } from '@/lib/embeddings/transcript';
 import { 
@@ -13,6 +14,7 @@ import {
   validateChunkSize, 
   createChunkMetadata 
 } from '@/lib/chunking';
+import { upsertResearchGoal } from '@/lib/weaviate/weaviate-research-goal';
 
 export type TranscriptChunkInput = {
   speaker: string;
@@ -186,6 +188,25 @@ export async function upsertInterviewSession(session: any) {
     transcriptEntries: Array.isArray(session.transcript) ? session.transcript.length : 0
   });
 
+  let researchGoalReference: string | null = null;
+  const goalText = typeof session.researchGoal === 'string' ? session.researchGoal.trim() : '';
+  if (goalText) {
+    try {
+      researchGoalReference = await upsertResearchGoal({
+        goalText,
+        targetAudience: session.targetAudience,
+        sensitivity: session.sensitivity,
+        createdAt: session.createdAt,
+        updatedAt: session.updatedAt
+      });
+    } catch (error) {
+      console.error('⚠️ [WEAVIATE] Failed to upsert ResearchGoal reference for session', {
+        sessionId: session.sessionId,
+        error
+      });
+    }
+  }
+
   const result = await weaviateClient.graphql
     .get()
     .withClassName('InterviewSession')
@@ -201,11 +222,14 @@ export async function upsertInterviewSession(session: any) {
   const existing = result.data?.Get?.InterviewSession?.[0];
   const sessionData = buildInterviewSessionPayload(session);
 
+  const references = researchGoalReference ? { researchGoal: researchGoalReference } : undefined;
+
   if (existing?._additional?.id) {
     await updateObjectWithReferences(
       'InterviewSession',
       existing._additional.id,
-      sessionData
+      sessionData,
+      references
     );
     console.log('✅ [WEAVIATE] Updated InterviewSession', {
       sessionId: session.sessionId,
@@ -214,7 +238,7 @@ export async function upsertInterviewSession(session: any) {
     return existing._additional.id as string;
   }
 
-  const created = await createObjectWithReferences('InterviewSession', sessionData);
+  const created = await createObjectWithReferences('InterviewSession', sessionData, references);
   console.log('✅ [WEAVIATE] Created InterviewSession', {
     sessionId: session.sessionId,
     weaviateId: created.id
@@ -1000,6 +1024,37 @@ export async function fetchInterviewSession(sessionId: string) {
     console.warn('ℹ️ [WEAVIATE] InterviewSession not found', { sessionId });
   }
   return parseInterviewSession(session);
+}
+
+export async function deleteInterviewSessionBySessionId(sessionId: string): Promise<string | null> {
+  const weaviateClient = getWeaviateClient();
+
+  const result = await weaviateClient.graphql
+    .get()
+    .withClassName('InterviewSession')
+    .withFields('_additional { id } sessionId')
+    .withWhere({
+      path: ['sessionId'],
+      operator: 'Equal',
+      valueText: sessionId
+    })
+    .withLimit(1)
+    .do();
+
+  const raw = result?.data?.Get?.InterviewSession?.[0];
+  const weaviateId = raw?._additional?.id;
+
+  if (!weaviateId) {
+    console.warn('[WEAVIATE] No InterviewSession found to delete for sessionId:', sessionId);
+    return null;
+  }
+
+  await deleteObjectCascade('InterviewSession', weaviateId);
+  console.log('🗑️ [WEAVIATE] Deleted InterviewSession and related data', {
+    sessionId,
+    weaviateId
+  });
+  return weaviateId;
 }
 
 async function fetchInterviewSessionByField(field: string, value: string) {

@@ -15,21 +15,41 @@ interface PsychometricProfile {
 }
 
 interface SessionData {
-  id: string;
-  researchGoal: string;
-  status: string;
-  participantEmail: string;
-  createdAt: string;
-  transcript: string;
+  id?: string;
+  sessionId?: string;
+  researchGoal?: string;
+  status?: string;
+  participantEmail?: string;
+  createdAt?: string;
+  startTime?: string;
+  endTime?: string;
+  durationMinutes?: number;
+  transcript?: string;
   summaries: any[];
-  psychometricProfile: PsychometricProfile;
-  evaluationMetrics: any;
+  psychometricProfile?: PsychometricProfile | null;
+  evaluationMetrics?: any;
 }
 
 export default function AnalyticsDashboard() {
   const [sessions, setSessions] = useState<SessionData[]>([]);
   const [selectedSession, setSelectedSession] = useState<SessionData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [batchGoal, setBatchGoal] = useState<string>("");
+  const [batchLoading, setBatchLoading] = useState(false);
+  const [batchError, setBatchError] = useState<string | null>(null);
+  const [batchSummary, setBatchSummary] = useState<null | {
+    researchGoalId: string;
+    interviewIds: string[];
+    keyThemes: { theme: string; count: number }[];
+    summary: string;
+    overallProfile: string;
+    insights: string[];
+    pains: string[];
+    gains: string[];
+    jobs: string[];
+    participantCount?: number;
+    updatedAt?: string;
+  }>(null);
 
   useEffect(() => {
     fetchSessions();
@@ -47,9 +67,73 @@ export default function AnalyticsDashboard() {
     }
   };
 
-  const completedSessions = sessions.filter(s => s.status === 'completed');
+  const fetchBatch = async () => {
+    setBatchError(null);
+    setBatchLoading(true);
+    try {
+      const res = await fetch(`/api/sessions/batch-summary?researchGoalId=${encodeURIComponent(batchGoal)}`);
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        throw new Error(j?.error || `HTTP ${res.status}`);
+      }
+      const j = await res.json();
+      setBatchSummary(j.batchSummary);
+    } catch (e: any) {
+      setBatchSummary(null);
+      setBatchError(e?.message || 'Failed to fetch batch summary');
+    } finally {
+      setBatchLoading(false);
+    }
+  };
+
+  const refreshBatch = async () => {
+    setBatchError(null);
+    setBatchLoading(true);
+    try {
+      const res = await fetch(`/api/sessions/batch-summary/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ researchGoalId: batchGoal })
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        throw new Error(j?.error || `HTTP ${res.status}`);
+      }
+      const j = await res.json();
+      setBatchSummary(j.batchSummary);
+    } catch (e: any) {
+      setBatchSummary(null);
+      setBatchError(e?.message || 'Failed to refresh batch summary');
+    } finally {
+      setBatchLoading(false);
+    }
+  };
+
+  const completedSessions = sessions.filter(s => (s?.status || 'created') === 'completed');
   const totalParticipants = completedSessions.length;
-  const averageSessionDuration = "12.5 minutes"; // This would be calculated from actual data
+
+  // Compute average duration from durationMinutes or start/end timestamps
+  const durations = completedSessions
+    .map((s) => {
+      if (typeof s.durationMinutes === 'number' && s.durationMinutes > 0) return s.durationMinutes;
+      const start = s.startTime ? Date.parse(s.startTime) : NaN;
+      const end = s.endTime ? Date.parse(s.endTime) : NaN;
+      if (!Number.isNaN(start) && !Number.isNaN(end) && end > start) {
+        return Math.round((end - start) / 60000);
+      }
+      return undefined;
+    })
+    .filter((n): n is number => typeof n === 'number');
+  const averageMinutes = durations.length > 0
+    ? Math.round(durations.reduce((a, b) => a + b, 0) / durations.length)
+    : 0;
+  const averageSessionDuration = `${averageMinutes} minute${averageMinutes === 1 ? '' : 's'}`;
+
+  // Compute completion rate from real data
+  const totalSessions = sessions.length;
+  const completionRate = totalSessions > 0
+    ? Math.round((completedSessions.length / totalSessions) * 100)
+    : 0;
 
   // Prepare data for radar chart
   const radarData = selectedSession?.psychometricProfile ? [
@@ -62,9 +146,10 @@ export default function AnalyticsDashboard() {
 
   // Prepare data for trait distribution chart
   const traitDistribution = completedSessions.reduce((acc, session) => {
-    if (session.psychometricProfile) {
+    if (session?.psychometricProfile) {
+      const label = ((session.id || session.sessionId || '').toString()).slice(0, 8) || 'unknown';
       acc.push({
-        session: session.id.slice(0, 8),
+        session: label,
         openness: session.psychometricProfile.openness,
         conscientiousness: session.psychometricProfile.conscientiousness,
         extraversion: session.psychometricProfile.extraversion,
@@ -139,10 +224,94 @@ export default function AnalyticsDashboard() {
               </div>
               <div className="ml-4">
                 <p className="text-sm font-medium text-gray-600">Completion Rate</p>
-                <p className="text-2xl font-bold text-gray-900">87%</p>
+                <p className="text-2xl font-bold text-gray-900">{completionRate}%</p>
               </div>
             </div>
           </div>
+        </div>
+
+        {/* Batch Summary Controls */}
+        <div className="mb-8 bg-white rounded-lg shadow p-6">
+          <h2 className="text-xl font-semibold text-gray-900 mb-4">Batch Summary (by Research Goal)</h2>
+          <div className="flex flex-col md:flex-row gap-3 md:items-center">
+            <input
+              value={batchGoal}
+              onChange={(e) => setBatchGoal(e.target.value)}
+              placeholder="Enter research goal string (exact match)"
+              className="flex-1 border border-gray-300 rounded px-3 py-2 text-sm"
+            />
+            <div className="flex gap-2">
+              <button
+                onClick={fetchBatch}
+                disabled={!batchGoal || batchLoading}
+                className="px-3 py-2 text-sm bg-gray-100 rounded border border-gray-300 disabled:opacity-50"
+              >
+                Load Summary
+              </button>
+              <button
+                onClick={refreshBatch}
+                disabled={!batchGoal || batchLoading}
+                className="px-3 py-2 text-sm bg-blue-600 text-white rounded disabled:opacity-50"
+              >
+                Refresh Summary
+              </button>
+            </div>
+          </div>
+          {batchError && (
+            <p className="text-sm text-red-600 mt-3">{batchError}</p>
+          )}
+          {batchLoading && (
+            <p className="text-sm text-gray-500 mt-3">Working…</p>
+          )}
+          {batchSummary && (
+            <div className="mt-6 grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <div>
+                <h3 className="font-semibold text-gray-900 mb-2">Summary</h3>
+                <p className="text-gray-700 whitespace-pre-line">{batchSummary.summary}</p>
+                <h3 className="font-semibold text-gray-900 mt-4 mb-2">Overall Profile</h3>
+                <p className="text-gray-700 whitespace-pre-line">{batchSummary.overallProfile}</p>
+                <h3 className="font-semibold text-gray-900 mt-4 mb-2">Insights</h3>
+                <ul className="list-disc pl-5 text-gray-700 space-y-1">
+                  {batchSummary.insights.map((i, idx) => (<li key={idx}>{i}</li>))}
+                </ul>
+              </div>
+              <div>
+                <h3 className="font-semibold text-gray-900 mb-2">Key Themes</h3>
+                <div className="flex flex-wrap gap-2">
+                  {batchSummary.keyThemes.map((t, idx) => (
+                    <span
+                      key={idx}
+                      className={`inline-flex items-center px-2 py-1 rounded-full text-xs border ${idx < 3 ? 'bg-yellow-100 border-yellow-300 text-yellow-900' : 'bg-gray-100 border-gray-300 text-gray-800'}`}
+                      title={`${t.count} mentions`}
+                    >
+                      {t.theme} ({t.count})
+                    </span>
+                  ))}
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
+                  <div>
+                    <h4 className="font-medium text-gray-900">Pains</h4>
+                    <ul className="list-disc pl-5 text-gray-700 space-y-1">
+                      {batchSummary.pains.map((p, idx) => (<li key={idx}>{p}</li>))}
+                    </ul>
+                  </div>
+                  <div>
+                    <h4 className="font-medium text-gray-900">Gains</h4>
+                    <ul className="list-disc pl-5 text-gray-700 space-y-1">
+                      {batchSummary.gains.map((g, idx) => (<li key={idx}>{g}</li>))}
+                    </ul>
+                  </div>
+                  <div>
+                    <h4 className="font-medium text-gray-900">Jobs</h4>
+                    <ul className="list-disc pl-5 text-gray-700 space-y-1">
+                      {batchSummary.jobs.map((j, idx) => (<li key={idx}>{j}</li>))}
+                    </ul>
+                  </div>
+                </div>
+                <p className="text-xs text-gray-500 mt-3">{batchSummary.participantCount || 0} interviews • {batchSummary.updatedAt ? new Date(batchSummary.updatedAt).toLocaleString() : ''}</p>
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
@@ -153,12 +322,22 @@ export default function AnalyticsDashboard() {
             </div>
             <div className="p-6">
               <div className="space-y-4">
-                {completedSessions.map((session) => (
+                {completedSessions.map((session, index) => (
                   <div
-                    key={session.id}
+                    key={(
+                      session.id ||
+                      session.sessionId ||
+                      `${session.participantEmail || 'anon'}_${
+                        session.createdAt ||
+                        session.startTime ||
+                        session.endTime ||
+                        (session.researchGoal || '').slice(0, 16) ||
+                        'unknown'
+                      }`
+                    ).toString()}
                     onClick={() => setSelectedSession(session)}
                     className={`p-4 border rounded-lg cursor-pointer transition-colors ${
-                      selectedSession?.id === session.id
+                      (selectedSession?.id || selectedSession?.sessionId) === (session.id || session.sessionId)
                         ? 'border-blue-500 bg-blue-50'
                         : 'border-gray-200 hover:border-gray-300'
                     }`}
@@ -169,10 +348,10 @@ export default function AnalyticsDashboard() {
                           {session.participantEmail || 'Anonymous'}
                         </h3>
                         <p className="text-sm text-gray-600">
-                          {new Date(session.createdAt).toLocaleDateString()}
+                          {session.createdAt ? new Date(session.createdAt).toLocaleDateString() : ''}
                         </p>
                         <p className="text-sm text-gray-500 mt-1">
-                          {session.researchGoal.slice(0, 60)}...
+                          {(session.researchGoal || '').slice(0, 60)}...
                         </p>
                       </div>
                       <div className="text-right">
