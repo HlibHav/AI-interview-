@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useEffect, Suspense } from "react";
-import { Mic, AlertCircle } from "lucide-react";
+import { useState, useEffect, Suspense, useRef } from "react";
+import { AlertCircle } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import SimpleBPInterviewRoom from "../components/SimpleBPInterviewRoom";
 
@@ -15,6 +15,13 @@ function RespondentInterfaceContent() {
   const [session, setSession] = useState<any>(null);
   const [isLoadingSession, setIsLoadingSession] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const persistedEmailRef = useRef<string | null>(null);
+
+  const rawEmailParam =
+    searchParams?.get('participantEmail') ||
+    searchParams?.get('email') ||
+    searchParams?.get('userEmail') ||
+    null;
 
   useEffect(() => {
     // Extract session ID from URL (support both sessionId and session parameters)
@@ -45,12 +52,55 @@ function RespondentInterfaceContent() {
     }
   };
 
+  const trimmedEmailParam = rawEmailParam ? rawEmailParam.trim() : null;
+  const sessionEmail = session?.participantEmail ? String(session.participantEmail) : null;
+  const effectiveEmail = trimmedEmailParam || sessionEmail || null;
+  const normalizedEffectiveEmail = effectiveEmail ? effectiveEmail.toLowerCase() : null;
+
   // Auto-start: once session is loaded, immediately connect to BEY
   useEffect(() => {
     if (session && !isConnected) {
       setIsConnected(true);
     }
   }, [session, isConnected]);
+
+  useEffect(() => {
+    if (!sessionId || !normalizedEffectiveEmail) {
+      return;
+    }
+    if ((session?.participantEmail || '').toLowerCase() === normalizedEffectiveEmail) {
+      persistedEmailRef.current = normalizedEffectiveEmail;
+      return;
+    }
+    if (persistedEmailRef.current === normalizedEffectiveEmail) {
+      return;
+    }
+
+    const persist = async () => {
+      try {
+        const response = await fetch('/api/sessions/update-transcript', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            sessionId,
+            transcript: [],
+            participantEmail: normalizedEffectiveEmail,
+          }),
+        });
+        if (response.ok) {
+          persistedEmailRef.current = normalizedEffectiveEmail;
+        } else {
+          console.warn('Failed to persist participant email', await response.text());
+        }
+      } catch (err) {
+        console.error('Error persisting participant email:', err);
+      }
+    };
+
+    void persist();
+  }, [sessionId, normalizedEffectiveEmail, session?.participantEmail]);
 
   const handleDisconnect = () => {
     setIsConnected(false);
@@ -87,11 +137,14 @@ function RespondentInterfaceContent() {
     );
   }
 
+  // Email is optional - allow interview to proceed without it
+  // The email will be captured later if needed
+
   if (isConnected) {
     return (
       <SimpleBPInterviewRoom
         sessionId={sessionId}
-        participantEmail={`anonymous-${(sessionId || '').slice(0, 8)}@interview.local`}
+        participantEmail={effectiveEmail || undefined}
         researchGoal={session?.researchGoal}
         interviewScript={session?.script}
         onDisconnect={handleDisconnect}

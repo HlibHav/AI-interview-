@@ -9,7 +9,8 @@
     "lint": "eslint",
     "api": "next dev --port 3001",
     "setup": "npm install",
-    "backfill:transcripts": "tsx scripts/backfill-transcripts.ts"
+    "backfill:transcripts": "tsx scripts/backfill-transcripts.ts",
+    "weaviate:clear": "tsx scripts/clear-weaviate.ts"
   },
   "dependencies": {
     "@arizeai/openinference-semantic-conventions": "^2.1.2",
@@ -54,6 +55,7 @@
     "jsonwebtoken": "^9.0.2",
     "langchain": "^1.0.1",
     "lucide-react": "^0.294.0",
+    "motion": "^12.23.24",
     "multer": "^1.4.5-lts.1",
     "next": "^14.2.33",
     "openai": "^4.20.1",

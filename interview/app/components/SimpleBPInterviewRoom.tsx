@@ -23,24 +23,41 @@ export default function SimpleBPInterviewRoom({
   const [error, setError] = useState<string | null>(null);
   const [agentStatus, setAgentStatus] = useState<string>('Ready to start');
   const [agent, setAgent] = useState<any>(null);
+  const [resolvedParticipantEmail, setResolvedParticipantEmail] = useState<string | null>(
+    participantEmail ?? null
+  );
   const [embedUrl, setEmbedUrl] = useState<string | null>(null);
   const [conversationUrl, setConversationUrl] = useState<string | null>(null);
   const [transcript, setTranscript] = useState<any[]>([]);
   const [beyAgentId, setBeyAgentId] = useState<string | null>(null);
   const beyAgentIdRef = useRef<string | null>(null);
+  const transcriptRef = useRef<any[]>([]);
   const startBtnLock = useRef(false);
-  const eventSourceRef = useRef<EventSource | null>(null);
   const completionTriggeredRef = useRef(false);
+  const useFallbackAgent = false;
 
-  // Function to add conversation entry to transcript
+  useEffect(() => {
+    if (participantEmail && participantEmail !== resolvedParticipantEmail) {
+      setResolvedParticipantEmail(participantEmail);
+    }
+  }, [participantEmail, resolvedParticipantEmail]);
+
+  useEffect(() => {
+    transcriptRef.current = transcript;
+  }, [transcript]);
+
+  // Function to add conversation entry to transcript and return updated list
   const addToTranscript = (speaker: string, text: string) => {
     const entry = {
       speaker,
       text,
       timestamp: new Date().toISOString()
     };
-    setTranscript(prev => [...prev, entry]);
+    const updatedTranscript = [...transcriptRef.current, entry];
+    transcriptRef.current = updatedTranscript;
+    setTranscript(updatedTranscript);
     console.log('📝 Added to transcript:', entry);
+    return updatedTranscript;
   };
 
   // Simulate conversation for testing
@@ -71,11 +88,11 @@ export default function SimpleBPInterviewRoom({
     try {
       console.log('🛰️ [SIMPLE ROOM] Updating transcript via /api/sessions/update-transcript', {
         sessionId,
-        entries: overrides?.entries ? overrides.entries.length : transcript.length,
+        entries: overrides?.entries ? overrides.entries.length : transcriptRef.current.length,
         hasBeyAgentId: Boolean(overrides?.agentId || beyAgentId || beyAgentIdRef.current)
       });
 
-      const transcriptPayload = overrides?.entries ?? transcript;
+      const transcriptPayload = overrides?.entries ?? transcriptRef.current;
       const agentIdPayload = overrides?.agentId ?? beyAgentId ?? beyAgentIdRef.current;
 
       const response = await fetch('/api/sessions/update-transcript', {
@@ -86,14 +103,18 @@ export default function SimpleBPInterviewRoom({
         body: JSON.stringify({
           sessionId,
           transcript: transcriptPayload,
-          beyondPresenceAgentId: agentIdPayload
+          beyondPresenceAgentId: agentIdPayload,
+          participantEmail: resolvedParticipantEmail || participantEmail || undefined
         }),
       });
 
       if (response.ok) {
         const result = await response.json();
+        if (result.session?.participantEmail && result.session.participantEmail !== resolvedParticipantEmail) {
+          setResolvedParticipantEmail(result.session.participantEmail);
+        }
         console.log('✅ [SIMPLE ROOM] Transcript update succeeded', {
-          updatedEntries: transcript.length,
+          updatedEntries: transcriptPayload.length,
           sessionStatus: result.session?.status
         });
       } else {
@@ -107,7 +128,7 @@ export default function SimpleBPInterviewRoom({
     } catch (error) {
       console.error('❌ [SIMPLE ROOM] Error updating transcript:', error);
     }
-  }, [sessionId, transcript, beyAgentId]);
+  }, [sessionId, beyAgentId, participantEmail, resolvedParticipantEmail]);
 
   // Function to complete session with real data
   const completeSession = useCallback(async () => {
@@ -119,19 +140,14 @@ export default function SimpleBPInterviewRoom({
 
     try {
       setAgentStatus('Completing session...');
-      if (transcript.length === 0) {
+      if (transcriptRef.current.length === 0) {
         console.warn('⚠️ [SIMPLE ROOM] Local transcript is empty before completion');
       }
       console.log('🟡 [SIMPLE ROOM] Completing session', {
         sessionId,
-        localEntries: transcript.length
+        localEntries: transcriptRef.current.length
       });
 
-      if (eventSourceRef.current) {
-        eventSourceRef.current.close();
-        eventSourceRef.current = null;
-      }
-      
       // First persist the transcript (even if empty) and agent metadata
       await updateSessionTranscript();
       
@@ -161,7 +177,8 @@ export default function SimpleBPInterviewRoom({
       setError(`Failed to complete session: ${error instanceof Error ? error.message : 'Unknown error'}`);
       completionTriggeredRef.current = false;
     }
-  }, [sessionId, transcript, updateSessionTranscript]);
+  }, [sessionId, updateSessionTranscript]);
+
 
   const generateSystemPrompt = (researchGoal?: string, interviewScript?: any): string => {
     const basePrompt = `You are an AI research interviewer conducting a qualitative interview. Your role is to:
@@ -235,7 +252,6 @@ Follow this script but feel free to ask follow-up questions based on the partici
       setState('initializing');
       setAgentStatus('Creating AI agent...');
 
-      // Debug: Log the script data being passed
       console.log("🔍 Script data received:", {
         hasScript: !!interviewScript,
         scriptType: typeof interviewScript,
@@ -243,7 +259,6 @@ Follow this script but feel free to ask follow-up questions based on the partici
         scriptContent: interviewScript
       });
 
-      // Step 1: Create BP Agent using our API route (avoids CORS issues)
       console.log("🤖 Creating BP Agent with Create Agent API...");
       const agentResponse = await fetch('/api/beyond-presence/create-agent', {
         method: 'POST',
@@ -263,80 +278,123 @@ Follow this script but feel free to ask follow-up questions based on the partici
         }),
       });
 
-      if (!agentResponse.ok) {
-        const errorData = await agentResponse.json();
-        throw new Error(errorData.error || 'Failed to create BP agent');
+      const responseText = await agentResponse.text();
+      let agentData: any = null;
+      try {
+        agentData = responseText ? JSON.parse(responseText) : null;
+      } catch (parseError) {
+        console.warn('⚠️ Unable to parse response from create-agent as JSON', parseError);
       }
 
-      const agentData = await agentResponse.json();
-      console.log("✅ BP Agent created:", agentData);
-      
-      // Generate embed URL using the correct Beyond Presence pattern
-      const generatedEmbedUrl = `https://bey.chat/${agentData.agent.id}`;
-      const generatedConversationUrl = `https://app.bey.chat/conversation/${agentData.agent.id}`;
-      
-      console.log("🔗 Generated embed URL:", generatedEmbedUrl);
-      console.log("🔗 Generated conversation URL:", generatedConversationUrl);
-      console.log("🔗 Agent ID:", agentData.agent.id);
-      
-      setAgent(agentData.agent);
-      setEmbedUrl(generatedEmbedUrl);
-      setConversationUrl(generatedConversationUrl);
-      setBeyAgentId(agentData.agent.id);
-      beyAgentIdRef.current = agentData.agent.id;
-      console.log('✅ [SIMPLE ROOM] Stored Beyond Presence agent info', {
-        agentId: agentData.agent.id
-      });
+      if (agentResponse.ok && agentData?.success !== false) {
+        console.log("✅ BP Agent created:", agentData);
 
-      // Persist agent metadata even before transcript entries exist
-      void updateSessionTranscript({
-        entries: transcript,
-        agentId: agentData.agent.id
-      });
+        if (!agentData.agent || !agentData.agent.id) {
+          throw new Error('Agent creation succeeded but no agent ID was returned');
+        }
 
-      setAgentStatus('Agent created successfully');
-      setState('connected');
+        const agentId = agentData.agent.id;
+        const embedUrlFromAPI = agentData.agent.embedUrl || agentData.agent.embed_url;
+        const conversationUrlFromAPI = agentData.agent.conversationUrl || agentData.agent.conversation_url;
 
+        // Use https://bey.chat/{agentId} format (preferred by BEY API)
+        const generatedEmbedUrl =
+          embedUrlFromAPI ||
+          `https://bey.chat/${agentId}`;
+        const generatedConversationUrl =
+          conversationUrlFromAPI || `https://bey.chat/${agentId}`;
+
+        console.log("🔗 Embed URL:", generatedEmbedUrl);
+        console.log("🔗 Conversation URL:", generatedConversationUrl);
+        console.log("🔗 Agent ID:", agentId);
+
+        setAgent(agentData.agent);
+        setEmbedUrl(generatedEmbedUrl);
+        setConversationUrl(generatedConversationUrl);
+        setBeyAgentId(agentId);
+        beyAgentIdRef.current = agentId;
+        setAgentStatus('Agent created successfully');
+        setState('connected');
+
+        void updateSessionTranscript({
+          entries: transcriptRef.current,
+          agentId: agentId
+        });
+
+        return;
+      }
+
+      if (agentResponse.ok && agentData?.success === false) {
+        throw new Error(
+          agentData?.error ||
+            agentData?.message ||
+            'Failed to create BP agent with Beyond Presence.'
+        );
+      }
+
+      if (!agentResponse.ok) {
+        let message = agentData?.error || agentData?.message;
+        if (!message && responseText) {
+          message = responseText;
+        }
+        if (!message) {
+          message = `Failed to create BP agent: ${agentResponse.status} ${agentResponse.statusText}`;
+        }
+        throw new Error(message);
+      }
+
+      throw new Error('Failed to create BP agent. Unknown response from server.');
     } catch (e: any) {
-      console.error(e);
-      setError(e?.message ?? 'Unknown error');
+      console.error('❌ [SIMPLE ROOM] Error starting interview:', e);
+      const errorMessage = e?.message || 'Unknown error';
+
+      let userFriendlyError = errorMessage;
+      if (errorMessage.includes('not found') || errorMessage.includes('404')) {
+        userFriendlyError =
+          'Agent not found. This may happen if the agent was deleted. Please refresh the page to create a new agent.';
+      } else if (errorMessage.includes('creator')) {
+        userFriendlyError =
+          'Agent initialization failed. Please try refreshing the page or contact support if the issue persists.';
+      } else if (errorMessage.includes('Failed to create')) {
+        userFriendlyError =
+          'Failed to create AI agent. Please check your internet connection and try again.';
+      }
+
+      setError(userFriendlyError);
       setState('error');
+      setAgentStatus(`Error: ${userFriendlyError}`);
     } finally {
       startBtnLock.current = false;
     }
-  }, [sessionId, researchGoal, interviewScript, updateSessionTranscript, transcript]);
+  }, [
+    generateSystemPrompt,
+    interviewScript,
+    researchGoal,
+    sessionId,
+    updateSessionTranscript
+  ]);
 
   const stop = useCallback(async () => {
-    if (eventSourceRef.current) {
-      eventSourceRef.current.close();
-      eventSourceRef.current = null;
-    }
-
     setState('idle');
     setError(null);
     setAgentStatus('Disconnected');
     setAgent(null);
     setEmbedUrl(null);
     setConversationUrl(null);
+    transcriptRef.current = [];
+    setTranscript([]);
     setBeyAgentId(null);
     beyAgentIdRef.current = null;
     console.log('ℹ️ [SIMPLE ROOM] Interview stopped, local state reset');
   }, []);
 
-  const disconnect = async () => {
-    await completeSession();
+  const disconnect = useCallback(async () => {
+    if (useFallbackAgent) {
+      await completeSession();
+    }
     await stop();
     onDisconnect?.();
-  };
-
-  useEffect(() => {
-    return () => {
-      if (eventSourceRef.current) {
-        eventSourceRef.current.close();
-        eventSourceRef.current = null;
-      }
-    };
-  }, []);
+  }, [completeSession, onDisconnect, stop, useFallbackAgent]);
 
   // Auto-start the interview on mount
   useEffect(() => {
@@ -361,14 +419,14 @@ Follow this script but feel free to ask follow-up questions based on the partici
 
         if (ended) {
           console.log('📞 [SIMPLE ROOM] BEY call ended detected via postMessage');
-          if (eventSourceRef.current) {
-            eventSourceRef.current.close();
-            eventSourceRef.current = null;
+          if (useFallbackAgent) {
+            setAgentStatus('Call ended. Finalising session...');
+            void completeSession().finally(() => {
+              stop().catch(() => null);
+            });
+          } else {
+            setAgentStatus('Call ended. Processing results via webhook...');
           }
-          setAgentStatus('Call ended. Finalising session...');
-          void completeSession().finally(() => {
-            stop().catch(() => null);
-          });
         }
       } catch (e) {
         // ignore malformed events
@@ -377,88 +435,7 @@ Follow this script but feel free to ask follow-up questions based on the partici
 
     window.addEventListener('message', handleBeyMessage);
     return () => window.removeEventListener('message', handleBeyMessage);
-  }, [completeSession, stop]);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    if (!beyAgentId) return;
-    if (completionTriggeredRef.current) {
-      return;
-    }
-
-    if (eventSourceRef.current) {
-      eventSourceRef.current.close();
-      eventSourceRef.current = null;
-    }
-
-    try {
-      const url = new URL(`/api/beyond-presence/stream/${beyAgentId}`, window.location.origin);
-      url.searchParams.set('sessionId', sessionId);
-
-      const eventSource = new EventSource(url.toString());
-      eventSourceRef.current = eventSource;
-
-      eventSource.onmessage = (event) => {
-        try {
-          const payload = JSON.parse(event.data);
-          if (!payload || !payload.type) {
-            return;
-          }
-
-          if (payload.type === 'call-ended') {
-            console.log('📡 [SIMPLE ROOM] Stream reported call ended', payload);
-            setAgentStatus('Call ended. Finalising session...');
-            void completeSession().finally(() => {
-              stop().catch(() => null);
-            });
-            return;
-          }
-
-          if (payload.type === 'text' || payload.type === 'agent_message') {
-            const speaker = payload.type === 'agent_message' || payload.speaker === 'agent' ? 'agent' : 'participant';
-            const text = payload.text || payload.message || payload.raw?.message || '';
-            if (!text) {
-              return;
-            }
-
-            const entry = {
-              speaker,
-              text,
-              timestamp: payload.timestamp || new Date().toISOString()
-            };
-
-            setTranscript((prev) => {
-              const duplicate = prev.some(
-                (existing) =>
-                  existing.speaker === entry.speaker &&
-                  existing.text === entry.text &&
-                  existing.timestamp === entry.timestamp
-              );
-              if (duplicate) {
-                return prev;
-              }
-              return [...prev, entry];
-            });
-          }
-        } catch (streamError) {
-          console.error('⚠️ [SIMPLE ROOM] Failed to process stream event:', streamError);
-        }
-      };
-
-      eventSource.onerror = (err) => {
-        console.error('⚠️ [SIMPLE ROOM] Stream connection error:', err);
-      };
-    } catch (connectionError) {
-      console.error('⚠️ [SIMPLE ROOM] Failed to initialise transcript stream:', connectionError);
-    }
-
-    return () => {
-      if (eventSourceRef.current) {
-        eventSourceRef.current.close();
-        eventSourceRef.current = null;
-      }
-    };
-  }, [beyAgentId, sessionId]);
+  }, [completeSession, stop, useFallbackAgent]);
 
   return (
     <div className="min-h-screen bg-gray-900 text-white p-6">
@@ -498,7 +475,20 @@ Follow this script but feel free to ask follow-up questions based on the partici
                   allow="camera; microphone; fullscreen"
                   style={{ border: 'none', maxWidth: '100%' }}
                   title="Beyond Presence Agent"
+                  onError={(e) => {
+                    console.error('❌ [SIMPLE ROOM] Iframe load error:', e);
+                    setError('Failed to load agent interface. The agent may have been deleted or is unavailable. Please try creating a new session.');
+                    setState('error');
+                  }}
+                  onLoad={(e) => {
+                    console.log('✅ [SIMPLE ROOM] Iframe loaded successfully');
+                  }}
                 />
+                {conversationUrl && (
+                  <div className="mt-2 text-xs text-gray-400">
+                    If the agent doesn't load, try the <a href={conversationUrl} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">conversation link</a> instead.
+                  </div>
+                )}
               </div>
             ) : conversationUrl ? (
               <div className="mb-4">
@@ -556,7 +546,7 @@ Follow this script but feel free to ask follow-up questions based on the partici
 
             <div className="mt-4 text-sm text-gray-400">
               <p>Session ID: {sessionId}</p>
-              {participantEmail && <p>Participant: {participantEmail}</p>}
+              {(resolvedParticipantEmail || participantEmail) && (<p>Participant: {resolvedParticipantEmail || participantEmail}</p>)}
               {researchGoal && <p>Research Goal: {researchGoal}</p>}
             </div>
 

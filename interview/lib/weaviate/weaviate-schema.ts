@@ -81,6 +81,9 @@ export const schemaClasses: SchemaClassDefinition[] = [
       { name: 'tags', dataType: ['text[]'] },
       { name: 'isPublic', dataType: ['boolean'] },
       { name: 'accessCode', dataType: ['text'] }
+    ],
+    references: [
+      { name: 'researchGoalRef', targetClass: 'ResearchGoal' }
     ]
   },
   {
@@ -94,7 +97,14 @@ export const schemaClasses: SchemaClassDefinition[] = [
       { name: 'summary', dataType: ['text'] },
       { name: 'keywords', dataType: ['text[]'] },
       { name: 'sentiment', dataType: ['text'] },
-      { name: 'timestamp', dataType: ['date'] }
+      { name: 'timestamp', dataType: ['date'] },
+      // New fields for advanced interview features
+      { name: 'emotionScore', dataType: ['number'] },
+      { name: 'energyScore', dataType: ['number'] },
+      { name: 'participantMood', dataType: ['text'] },
+      { name: 'category', dataType: ['text'] }, // 'goal', 'friction', 'workaround', 'neutral'
+      { name: 'contradictionFlags', dataType: ['text[]'] },
+      { name: 'guardrailTriggers', dataType: ['text[]'] }
     ],
     references: [
       { name: 'session', targetClass: 'InterviewSession' }
@@ -190,6 +200,24 @@ export const schemaClasses: SchemaClassDefinition[] = [
       { name: 'researchGoalLabel', dataType: ['text'] },
       { name: 'deletedAt', dataType: ['date'] },
       { name: 'lastSessionUpdatedAt', dataType: ['date'] }
+    ]
+  },
+  {
+    class: 'InterviewPlaybook',
+    description: 'Evolving playbook of interview strategies, patterns, and insights (ACE framework)',
+    properties: [
+      { name: 'playbookId', dataType: ['text'] },
+      { name: 'researchGoalId', dataType: ['text'] },
+      { name: 'version', dataType: ['int'] },
+      { name: 'playbookContent', dataType: ['text'] }, // JSON string of structured playbook
+      { name: 'totalStrategies', dataType: ['int'] },
+      { name: 'totalBullets', dataType: ['int'] },
+      { name: 'lastUpdatedBy', dataType: ['text'] }, // 'generator', 'reflection', 'curator', 'manual'
+      { name: 'createdAt', dataType: ['date'] },
+      { name: 'updatedAt', dataType: ['date'] }
+    ],
+    references: [
+      { name: 'researchGoal', targetClass: 'ResearchGoal' }
     ]
   }
 ];

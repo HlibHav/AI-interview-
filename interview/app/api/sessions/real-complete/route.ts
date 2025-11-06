@@ -45,6 +45,17 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    if (session.status && String(session.status).toLowerCase() === 'completed') {
+      console.log('ℹ️ [REAL COMPLETE] Session already marked completed, skipping duplicate completion', {
+        sessionId
+      });
+      return NextResponse.json({
+        success: true,
+        message: 'Session already completed',
+        session
+      });
+    }
+
     // Check if session has actual transcript data
     if (!session.transcript || session.transcript.length === 0) {
       console.warn('⚠️ [REAL COMPLETE] Session has no transcript entries prior to completion', { sessionId });

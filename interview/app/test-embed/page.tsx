@@ -3,7 +3,9 @@
 import React from 'react';
 
 export default function TestEmbedPage() {
+  // This is a test page - replace with actual agentId from API
   const agentId = "fc8bd7ef-9bc8-4fb7-bb1f-41f92a70f9db";
+  // Use https://bey.chat/{agentId} format (preferred by BEY API)
   const embedUrl = `https://bey.chat/${agentId}`;
 
   return (

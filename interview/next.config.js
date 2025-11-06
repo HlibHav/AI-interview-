@@ -1,3 +1,5 @@
+const isProd = process.env.NODE_ENV === 'production';
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: 'standalone',
@@ -9,7 +11,7 @@ const nextConfig = {
     WEAVIATE_HOST: process.env.WEAVIATE_HOST || 'localhost:8081',
   },
   experimental: {
-    instrumentationHook: true,
+    instrumentationHook: isProd,
     serverComponentsExternalPackages: ['weaviate-ts-client'],
   },
   webpack: (config, { isServer }) => {

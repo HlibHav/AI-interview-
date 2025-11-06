@@ -60,7 +60,7 @@ This document describes the end-to-end architecture of the AI Interview Assistan
 
 ### Beyond Presence API
 - `app/api/beyond-presence/create-agent`: Builds prompts and registers interview agents with BEY.
-- `app/api/beyond-presence/export-transcript`: Pulls conversation data from BEY and persists it to Weaviate.
+- `app/api/beyond-presence/webhook`: Receives transcripts & call-completion events from BEY webhooks and persists them.
 - `app/api/beyond-presence/initialize`: Legacy prompt-builder used by older flows (optional).
 
 ### Auxiliary APIs

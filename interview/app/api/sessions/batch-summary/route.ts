@@ -2,29 +2,28 @@ import { NextRequest, NextResponse } from 'next/server';
 import { fetchBatchSummary, listBatchSummariesWithFallback } from '@/lib/weaviate/weaviate-batch-summary';
 
 export const dynamic = 'force-dynamic';
-export const runtime = 'nodejs';
 
-export async function GET(req: NextRequest) {
+export async function GET(request: NextRequest) {
   try {
-    const researchGoalId = req.nextUrl.searchParams.get('researchGoalId');
+    const { searchParams } = new URL(request.url);
+    const researchGoalId = searchParams.get('researchGoalId');
 
-    if (!researchGoalId || !researchGoalId.trim()) {
-      const rows = await listBatchSummariesWithFallback(200);
-      return NextResponse.json({ success: true, batches: rows });
+    if (researchGoalId) {
+      const doc = await fetchBatchSummary(researchGoalId.trim());
+      if (!doc) {
+        return NextResponse.json({ success: false, error: 'Batch summary not found' }, { status: 404 });
+      }
+      return NextResponse.json({ success: true, batchSummary: doc });
     }
 
-    const doc = await fetchBatchSummary(researchGoalId.trim());
-    if (!doc) {
-      return NextResponse.json({ error: 'Batch summary not found' }, { status: 404 });
-    }
-
-    return NextResponse.json({ success: true, batchSummary: doc });
-  } catch (error) {
+    const batches = await listBatchSummariesWithFallback();
+    return NextResponse.json({ success: true, batches });
+  } catch (error: any) {
     console.error('GET /api/sessions/batch-summary error:', error);
-    const errorMessage = error instanceof Error ? error.message : 'Failed to fetch batch summary';
-    return NextResponse.json({ 
-      error: 'Failed to fetch batch summary',
-      details: errorMessage 
-    }, { status: 500 });
+    return NextResponse.json(
+      { success: false, error: error?.message || 'Failed to fetch batch summaries' },
+      { status: 500 }
+    );
   }
 }
+

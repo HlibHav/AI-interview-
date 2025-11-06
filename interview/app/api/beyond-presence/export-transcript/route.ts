@@ -575,16 +575,23 @@ async function fetchCallsFromBeyondPresence({
       endpoints.add(`/v1/calls?sessionId=${sessionId}`);
     });
 
-  if (agentId) {
-    endpoints.add(`/v1/calls?agent_id=${agentId}`);
-    endpoints.add(`/v1/calls?agentId=${agentId}`);
-  }
-
+  // NOTE: BEY API does not support ?agentId= or ?agent_id= query parameters
+  // Removed to prevent invalid API calls
+  
   endpoints.add('/v1/calls');
+
+  // Import rate limiter
+  const { beyApiRateLimiter, delay } = await import('@/lib/utils/rate-limiter');
 
   for (const endpoint of endpoints) {
     const url = `${baseUrl}${endpoint}`;
     try {
+      // Rate limit: wait if needed before making request
+      await beyApiRateLimiter.waitUntilAllowed(`bey-api-${endpoint}`, 5000);
+      
+      // Add small delay between requests to prevent overwhelming API
+      await delay(150); // 150ms delay between requests
+
       const response = await fetch(url, {
         headers: {
           'x-api-key': process.env.BEY_API_KEY!,

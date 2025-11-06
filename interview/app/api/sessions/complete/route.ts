@@ -5,6 +5,7 @@ import {
   upsertTranscriptDocument,
   fetchInterviewSession
 } from '@/lib/weaviate/weaviate-session';
+import { runACECycle } from '@/lib/playbook/playbook-orchestrator';
 import { computeAndPersistBatchSummary } from '@/lib/aggregations/batchSummary';
 
 // Global session storage declaration
@@ -148,6 +149,39 @@ export async function POST(request: NextRequest) {
         });
       } else {
         console.log('ℹ️ [SESSION COMPLETE] No transcript entries to store');
+      }
+
+      // Run ACE cycle (Generator → Reflection → Curator) to evolve playbook
+      // Only run if we have a research goal to associate the playbook with
+      const researchGoalForPlaybook = (updatedSession.researchGoal || '').trim();
+      if (researchGoalForPlaybook) {
+        try {
+          // Use research goal text as the ID for playbook association
+          const aceResult = await runACECycle({
+            sessionId,
+            researchGoalId: researchGoalForPlaybook, // Use research goal text as ID
+            transcript: updatedSession.transcript || [],
+            participantResponses: (updatedSession.transcript || []).filter(
+              (e: any) => e.speaker === 'participant' || e.speaker === 'user'
+            ),
+            interviewerActions: (updatedSession.transcript || []).filter(
+              (e: any) => e.speaker === 'agent' || e.speaker === 'ai'
+            ),
+            researchGoal: researchGoalForPlaybook,
+            sessionOutcome: 'success', // Could be determined by analysis
+            executionFeedback: `Interview completed with ${updatedSession.transcript?.length || 0} exchanges`
+          });
+          console.log('✅ [SESSION COMPLETE] ACE cycle completed', {
+            sessionId,
+            playbookId: aceResult.playbookId,
+            playbookVersion: aceResult.playbookVersion,
+            newStrategies: aceResult.curatorOperations
+          });
+        } catch (aceError) {
+          console.warn('⚠️ [SESSION COMPLETE] ACE cycle failed (non-critical):', aceError);
+        }
+      } else {
+        console.log('ℹ️ [SESSION COMPLETE] Skipping ACE cycle - no research goal available');
       }
 
       // Now call psychometric agent with the weaviateSessionId

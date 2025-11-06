@@ -41,6 +41,7 @@ export async function GET(
       });
 
       let lastMessageCount = 0;
+      let lastPersistedEmail: string | null = null;
       let resolvedCallId: string | null = null;
       let callEndedNotified = false;
       const encoder = new TextEncoder();
@@ -51,7 +52,9 @@ export async function GET(
       let cachedSession = sessionId ? sessions.get(sessionId) ?? null : null;
       let sessionFetchAttempted = false;
       let lastCallStatusCheck = 0;
-      const CALL_STATUS_INTERVAL_MS = 2000;
+      let lastCallResolveAttempt = 0;
+      const CALL_STATUS_INTERVAL_MS = 10000; // Increased from 8s to 10s
+      const CALL_RESOLVE_INTERVAL_MS = 30000; // Increased from 20s to 30s
 
       const baseUrl = process.env.BEY_API_URL || 'https://api.bey.dev';
       const apiHeaders = {
@@ -62,6 +65,13 @@ export async function GET(
       const streamTranscriptsEnabled =
         (process.env.BEY_STREAM_TRANSCRIPTS || 'true').toLowerCase() !== 'false';
 
+      if (!streamTranscriptsEnabled) {
+        console.log('ℹ️ [STREAM] Transcript polling disabled via BEY_STREAM_TRANSCRIPTS=false', {
+          agentId,
+          sessionId
+        });
+      }
+
       const sendEvent = (payload: any) => {
         try {
           controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`));
@@ -69,6 +79,94 @@ export async function GET(
           console.warn('⚠️ [STREAM] Failed to enqueue SSE payload:', error);
         }
       };
+
+      const extractParticipantEmail = (message: any): string | null => {
+        if (!message || typeof message !== 'object') {
+          return null;
+        }
+        const queue: Array<{ value: any; key?: string }> = Object.keys(message).map((key) => ({
+          key,
+          value: (message as any)[key],
+        }));
+        const visited = new Set<any>();
+
+        while (queue.length > 0) {
+          const { value, key } = queue.shift()!;
+          if (visited.has(value)) {
+            continue;
+          }
+          visited.add(value);
+
+          if (typeof value === 'string') {
+            const keyHint = key ? key.toLowerCase() : '';
+            if (keyHint.includes('email') && value.includes('@')) {
+              return value.trim().toLowerCase();
+            }
+            continue;
+          }
+
+          if (Array.isArray(value)) {
+            value.forEach((entry) => queue.push({ value: entry }));
+            continue;
+          }
+
+          if (value && typeof value === 'object') {
+            for (const nestedKey of Object.keys(value)) {
+              queue.push({ key: nestedKey, value: (value as any)[nestedKey] });
+            }
+          }
+        }
+
+        return null;
+      };
+
+      const persistParticipantEmail = async (email: string | null | undefined) => {
+        if (!sessionId || !email) {
+          return;
+        }
+
+        const normalized = email.trim().toLowerCase();
+        if (!normalized || lastPersistedEmail === normalized) {
+          return;
+        }
+
+        if (cachedSession?.participantEmail && cachedSession.participantEmail.toLowerCase() === normalized) {
+          lastPersistedEmail = normalized;
+          return;
+        }
+
+        try {
+          const baseUrl =
+            process.env.NEXT_PUBLIC_BASE_URL ||
+            `${request.nextUrl.protocol}//${request.nextUrl.host}`;
+
+          const resp = await fetch(`${baseUrl}/api/sessions/update-transcript`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              sessionId,
+              transcript: [],
+              participantEmail: normalized
+            })
+          });
+
+          if (resp.ok) {
+            lastPersistedEmail = normalized;
+            if (cachedSession) {
+              cachedSession = { ...cachedSession, participantEmail: normalized };
+              sessions.set(sessionId, cachedSession);
+            }
+          } else {
+            console.warn('⚠️ [STREAM] Failed to persist participant email', {
+              sessionId,
+              status: resp.status
+            });
+          }
+        } catch (error) {
+          console.warn('⚠️ [STREAM] Error persisting participant email:', error);
+        }
+      };
+
 
       const endStream = (reason: string) => {
         if (callEndedNotified) {
@@ -90,6 +188,30 @@ export async function GET(
         } catch (error) {
           console.warn('⚠️ [STREAM] Failed to close controller gracefully:', error);
         }
+      };
+
+      const handleUnauthorizedResponse = async (response: Response, context: string) => {
+        if (callEndedNotified) {
+          return true;
+        }
+        if (response.status === 401 || response.status === 403) {
+          let errorText: string | undefined;
+          try {
+            errorText = await response.text();
+          } catch (error) {
+            errorText = undefined;
+          }
+          console.error('❌ [STREAM] Beyond Presence unauthorized', {
+            context,
+            status: response.status,
+            errorText,
+            sessionId,
+            agentId,
+          });
+          endStream('beyond_presence_forbidden');
+          return true;
+        }
+        return false;
       };
 
       const sessionStatusIsComplete = (status: unknown) => {
@@ -209,10 +331,21 @@ export async function GET(
         lastCallStatusCheck = now;
 
         try {
+          // Import rate limiter
+          const { beyApiRateLimiter, delay } = await import('@/lib/utils/rate-limiter');
+          
+          // Rate limit: wait if needed before making request
+          await beyApiRateLimiter.waitUntilAllowed(`call-status-${callId}`, 3000);
+          await delay(100); // Small delay
+
           const response = await fetch(`${baseUrl}/v1/calls/${callId}`, {
             headers: apiHeaders,
             cache: 'no-store'
           });
+
+          if (await handleUnauthorizedResponse(response, 'call_status')) {
+            return null;
+          }
 
           if (response.status === 404 || response.status === 410) {
             endStream('call_status_not_found');
@@ -224,6 +357,8 @@ export async function GET(
           }
 
           const payload = await response.json();
+          const callEmail = extractParticipantEmail(payload);
+          await persistParticipantEmail(callEmail);
           const status =
             payload?.status ||
             payload?.call?.status ||
@@ -258,19 +393,37 @@ export async function GET(
       };
 
       const resolveCallId = async () => {
+        const now = Date.now();
+        if (now - lastCallResolveAttempt < CALL_RESOLVE_INTERVAL_MS) {
+          return;
+        }
+        lastCallResolveAttempt = now;
+
+        // NOTE: BEY API does not support ?agentId= or ?agent_id= query parameters
+        // Removed to prevent invalid API calls
+        // Instead, we rely on callId resolution from messages endpoint or webhook
+        
         const candidates: string[] = [];
-        const endpoints = [
-          `/v1/calls?agent_id=${agentId}`,
-          `/v1/calls?agentId=${agentId}`,
-          '/v1/calls'
-        ];
+        // Only use endpoints that don't require agentId query parameter
+        const endpoints: string[] = [];
+
+        // Import rate limiter
+        const { beyApiRateLimiter, delay } = await import('@/lib/utils/rate-limiter');
 
         for (const endpoint of endpoints) {
           try {
+            // Rate limit: wait if needed before making request
+            await beyApiRateLimiter.waitUntilAllowed(`resolve-call-${endpoint}`, 3000);
+            await delay(100); // Small delay between requests
+
             const response = await fetch(`${baseUrl}${endpoint}`, {
               headers: apiHeaders,
               cache: 'no-store'
             });
+
+            if (await handleUnauthorizedResponse(response, `resolve_call_${endpoint}`)) {
+              return;
+            }
 
             if (!response.ok) {
               continue;
@@ -330,6 +483,13 @@ export async function GET(
       };
       // Polling setup is defined below
       const startPolling = () => {
+        if (!streamTranscriptsEnabled) {
+          console.log('ℹ️ [STREAM] Polling skipped (BEY_STREAM_TRANSCRIPTS=false)', {
+            agentId,
+            sessionId
+          });
+          return;
+        }
         if (callEndedNotified || interval) {
           return;
         }
@@ -356,18 +516,28 @@ export async function GET(
             }
           }
 
+            if (!streamTranscriptsEnabled) {
+              return;
+            }
+
+            // NOTE: BEY API does not support /v1/calls/{agentId}/messages
+            // Only use callId-based endpoints
             const fetchEndpoints = resolvedCallId
               ? [`/v1/calls/${resolvedCallId}/messages`]
-              : [
-                  `/v1/calls/${agentId}/messages`,
-                  `/v1/calls/${agentId}`
-                ];
+              : []; // Don't try agentId-based endpoints
 
             let response = null;
             let workingEndpoint = null;
 
+            // Import rate limiter
+            const { beyApiRateLimiter, delay } = await import('@/lib/utils/rate-limiter');
+
             for (const endpoint of fetchEndpoints) {
               try {
+                // Rate limit: wait if needed before making request
+                await beyApiRateLimiter.waitUntilAllowed(`messages-${endpoint}`, 3000);
+                await delay(100); // Small delay between requests
+
                 response = await fetch(
                   `${baseUrl}${endpoint}`,
                   {
@@ -375,6 +545,10 @@ export async function GET(
                     cache: 'no-store'
                   }
                 );
+
+                if (await handleUnauthorizedResponse(response, `messages_${endpoint}`)) {
+                  return;
+                }
 
                 if (response.ok || response.status === 404 || response.status === 410) {
                   workingEndpoint = endpoint;
@@ -413,6 +587,26 @@ export async function GET(
                 idlePolls = 0;
 
                 console.log("Sending new messages:", newMessages.length);
+
+                for (const rawMessage of newMessages) {
+                  const candidateId =
+                    rawMessage?.call_id ||
+                    rawMessage?.callId ||
+                    rawMessage?.call?.id ||
+                    rawMessage?.session_id ||
+                    rawMessage?.sessionId ||
+                    null;
+                  if (typeof candidateId === 'string' && candidateId && candidateId !== resolvedCallId) {
+                    resolvedCallId = candidateId;
+                    lastCallResolveAttempt = Date.now();
+                    lastMessageCount = messages.length;
+                    console.log('ℹ️ [STREAM] Updated call id from message payload', {
+                      agentId,
+                      callId: resolvedCallId
+                    });
+                    break;
+                  }
+                }
                 if (newMessages.some((msg: any) => msg?.type === 'event' && (msg?.event === 'call_ended' || msg?.status === 'ended'))) {
                   endStream('call_ended_event');
                 }
@@ -420,43 +614,68 @@ export async function GET(
               // Save to Weaviate if streaming transcripts is enabled
               if (streamTranscriptsEnabled && sessionId && newMessages.length > 0) {
                 try {
-                  const transcriptEntries = newMessages.map((msg: any) => ({
-                    speaker: msg.sender === 'ai' ? 'agent' : 'participant',
-                    text: msg.message || msg.text || '',
-                    timestamp: msg.sent_at || msg.timestamp || new Date().toISOString(),
-                    raw: msg
-                  })).filter((entry: any) => entry.text);
-                  
-                  if (transcriptEntries.length > 0) {
+                  const emailCandidate = (() => {
+                    for (const msg of newMessages) {
+                      const found = extractParticipantEmail(msg);
+                      if (found) return found;
+                    }
+                    return null;
+                  })();
+
+                  const transcriptEntries = newMessages
+                    .map((msg: any) => ({
+                      speaker: msg.sender === 'ai' ? 'agent' : 'participant',
+                      text: msg.message || msg.text || '',
+                      timestamp: msg.sent_at || msg.timestamp || new Date().toISOString(),
+                      raw: msg
+                    }))
+                    .filter((entry: any) => entry.text);
+
+                  if (transcriptEntries.length > 0 || emailCandidate) {
                     const baseUrl =
                       process.env.NEXT_PUBLIC_BASE_URL ||
                       `${request.nextUrl.protocol}//${request.nextUrl.host}`;
 
-                    const response = await fetch(`${baseUrl}/api/sessions/update-transcript`, {
+                    const body: Record<string, any> = {
+                      sessionId,
+                      transcript: transcriptEntries,
+                      beyondPresenceAgentId: agentId,
+                      beyondPresenceSessionId: resolvedCallId
+                    };
+
+                    if (emailCandidate) {
+                      body.participantEmail = emailCandidate;
+                    }
+
+                    const transcriptResponse = await fetch(`${baseUrl}/api/sessions/update-transcript`, {
                       method: 'POST',
                       headers: {
                         'Content-Type': 'application/json'
                       },
-                      body: JSON.stringify({
-                        sessionId,
-                        transcript: transcriptEntries,
-                        beyondPresenceAgentId: agentId,
-                        beyondPresenceSessionId: resolvedCallId
-                      })
+                      body: JSON.stringify(body)
                     });
 
-                    if (!response.ok) {
-                      const errorText = await response.text();
-                        console.error('❌ [STREAM] Failed to update transcript via API:', {
-                          sessionId,
-                          status: response.status,
-                          statusText: response.statusText,
-                          errorText
-                        });
-                      } else {
-                        console.log(`✅ [STREAM] Forwarded ${transcriptEntries.length} messages to transcript updater`, {
-                          sessionId
+                    if (!transcriptResponse.ok) {
+                      const errorText = await transcriptResponse.text();
+                      console.error('❌ [STREAM] Failed to update transcript via API:', {
+                        sessionId,
+                        status: transcriptResponse.status,
+                        statusText: transcriptResponse.statusText,
+                        errorText
                       });
+                    } else {
+                      console.log(`✅ [STREAM] Forwarded ${transcriptEntries.length} messages to transcript updater`, {
+                        sessionId,
+                        includesEmail: Boolean(emailCandidate)
+                      });
+                      if (emailCandidate) {
+                        const normalized = emailCandidate.toLowerCase();
+                        lastPersistedEmail = normalized;
+                        if (cachedSession) {
+                          cachedSession = { ...cachedSession, participantEmail: normalized };
+                          sessions.set(sessionId, cachedSession);
+                        }
+                      }
                     }
                   }
                 } catch (weaviateError) {
@@ -523,6 +742,10 @@ export async function GET(
                 }
               }
             } else {
+              if (response && (await handleUnauthorizedResponse(response, `messages_${workingEndpoint ?? 'unknown'}`))) {
+                return;
+              }
+
               idlePolls += 1;
               const statusCode = response?.status ?? 0;
               const isMissing = statusCode === 404 || statusCode === 410;
@@ -590,7 +813,7 @@ export async function GET(
               }
             }
           }
-        }, 2000); // Poll every 2 seconds
+        }, 5000); // Poll every 5 seconds (reduced frequency to prevent rate limiting)
 
         keepAliveInterval = setInterval(() => {
           if (callEndedNotified) {
@@ -612,7 +835,9 @@ export async function GET(
           }, 15000);
       };
 
-      startPolling();
+      if (streamTranscriptsEnabled) {
+        startPolling();
+      }
 
       // Clean up on close
       request.signal.addEventListener("abort", () => {

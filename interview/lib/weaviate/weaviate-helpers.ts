@@ -102,6 +102,28 @@ export async function ensureSchemaClass(className: string) {
   const classExists = !!findClassSchema(schema, className);
   if (classExists) {
     console.log(`✅ [WEAVIATE] Class ${className} already exists`);
+    
+    // Ensure any missing properties are added
+    if (schemaDefinition.properties?.length) {
+      for (const property of schemaDefinition.properties) {
+        try {
+          await ensureSchemaProperty(className, property);
+        } catch (error) {
+          console.warn(`⚠️ [WEAVIATE] Failed to ensure property ${property.name} on ${className}:`, error);
+        }
+      }
+    }
+
+    if (schemaDefinition.references?.length) {
+      for (const reference of schemaDefinition.references) {
+        try {
+          await ensureSchemaReference(className, reference);
+        } catch (error) {
+          console.warn(`⚠️ [WEAVIATE] Failed to ensure reference ${reference.name} on ${className}:`, error);
+        }
+      }
+    }
+
     return false;
   }
 
@@ -289,14 +311,15 @@ async function findReferencingObjects(targetClassName: string, targetUuid: strin
   const referencingObjects: Array<{ className: string; id: string }> = [];
 
   const referenceMap: Record<string, string[]> = {
-    ResearchGoal: ['QuestionPlan', 'InterviewSession', 'BatchSummary'],
+    ResearchGoal: ['QuestionPlan', 'InterviewSession', 'BatchSummary', 'InterviewPlaybook'],
     QuestionPlan: ['InterviewSession'],
     InterviewSession: ['TranscriptChunk', 'PsychometricProfile', 'Annotation', 'TranscriptDocument', 'BatchSummary'],
     BatchSummary: [],
     TranscriptChunk: ['Annotation'],
     TranscriptDocument: [],
     Annotation: [],
-    PsychometricProfile: []
+    PsychometricProfile: [],
+    InterviewPlaybook: []
   };
 
   const referencingClasses = Object.entries(referenceMap)
@@ -342,12 +365,13 @@ function referencePropertyForClass(className: string, targetClassName: string) {
   const referenceMap: Record<string, Record<string, string>> = {
     ResearchGoal: {},
     QuestionPlan: { ResearchGoal: 'researchGoal' },
-    InterviewSession: { ResearchGoal: 'researchGoal' },
+    InterviewSession: { ResearchGoal: 'researchGoalRef' },
     BatchSummary: { ResearchGoal: 'researchGoal', InterviewSession: 'sessions' },
     TranscriptChunk: { InterviewSession: 'session' },
     TranscriptDocument: { InterviewSession: 'session' },
     Annotation: { InterviewSession: 'session', TranscriptChunk: 'chunk' },
-    PsychometricProfile: { InterviewSession: 'session' }
+    PsychometricProfile: { InterviewSession: 'session' },
+    InterviewPlaybook: { ResearchGoal: 'researchGoal' }
   };
 
   return referenceMap[className]?.[targetClassName];

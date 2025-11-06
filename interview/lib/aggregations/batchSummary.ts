@@ -63,6 +63,59 @@ function extractCountFromObject(obj: any): number | undefined {
   return undefined;
 }
 
+function coerceTextValue(value: any): string {
+  if (value == null) {
+    return '';
+  }
+  if (typeof value === 'string') {
+    return value.trim();
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    const parts = value.map((item) => coerceTextValue(item)).filter((text) => text.length > 0);
+    return parts.join(' ').trim();
+  }
+  if (typeof value === 'object') {
+    const preferenceOrder = [
+      'headline',
+      'summary',
+      'insight',
+      'text',
+      'description',
+      'label',
+      'title',
+      'content',
+      'message',
+      'note',
+      'value'
+    ];
+    for (const key of preferenceOrder) {
+      const field = value[key];
+      if (typeof field === 'string' && field.trim().length > 0) {
+        if (key === 'headline' && typeof value.evidence === 'string' && value.evidence.trim().length > 0) {
+          return `${field.trim()}: ${value.evidence.trim()}`;
+        }
+        return field.trim();
+      }
+    }
+    const firstString = Object.values(value)
+      .map((val) => (typeof val === 'string' ? val.trim() : ''))
+      .find((text) => text.length > 0);
+    if (firstString) {
+      return firstString;
+    }
+    try {
+      const json = JSON.stringify(value);
+      return typeof json === 'string' ? json : '';
+    } catch {
+      return '';
+    }
+  }
+  return '';
+}
+
 function countThemes(items: Array<ThemeInput | null | undefined>): KeyTheme[] {
   const map = new Map<string, { theme: string; count: number }>();
 
@@ -268,15 +321,17 @@ function deriveFallbackDetails(params: {
   existingPersonality?: PersonalityProfile;
 }) {
   const summaryCandidates = params.perInterview
-    .map((item) => (item.summary || '').trim())
+    .map((item) => coerceTextValue(item.summary))
     .filter((text) => text.length > 0);
 
+  const rawInsightInputs: any[] = [
+    ...params.existingInsights,
+    ...params.perInterview.flatMap((item) => item.insights || [])
+  ];
+
   const insightCandidates = Array.from(
-    new Set([
-      ...params.existingInsights,
-      ...params.perInterview.flatMap((item) => (item.insights || []).map((insight) => (insight || '').trim()))
-    ])
-  ).filter((text) => text.length > 0);
+    new Set(rawInsightInputs.map((insight) => coerceTextValue(insight)).filter((text) => text.length > 0))
+  );
 
   const fallbackThemes = params.themeCounts.length > 0
     ? params.themeCounts
@@ -301,7 +356,9 @@ function deriveFallbackDetails(params: {
     : (() => {
         const fromInsights = filterByKeywords(insightCandidates, PAIN_KEYWORDS);
         if (fromInsights.length > 0) return fromInsights;
-        return fallbackThemes.slice(0, 3).map((theme) => `Challenge: ${theme.theme}`);
+        const derived = fallbackThemes.slice(0, 3).map((theme) => `Challenge: ${theme.theme}`);
+        if (derived.length > 0) return derived;
+        return ['No repeating pain points explicitly surfaced in this batch.'];
       })();
 
   const gains = params.existingGains.length > 0
@@ -309,7 +366,9 @@ function deriveFallbackDetails(params: {
     : (() => {
         const fromInsights = filterByKeywords(insightCandidates, GAIN_KEYWORDS);
         if (fromInsights.length > 0) return fromInsights;
-        return fallbackThemes.slice(0, 3).map((theme) => `Opportunity: ${theme.theme}`);
+        const derived = fallbackThemes.slice(0, 3).map((theme) => `Opportunity: ${theme.theme}`);
+        if (derived.length > 0) return derived;
+        return ['Gains were not explicitly articulated during these interviews.'];
       })();
 
   const jobs = params.existingJobs.length > 0
@@ -317,7 +376,9 @@ function deriveFallbackDetails(params: {
     : (() => {
         const fromInsights = filterByKeywords(insightCandidates, JOB_KEYWORDS);
         if (fromInsights.length > 0) return fromInsights;
-        return fallbackThemes.slice(0, 3).map((theme) => `Participants aim to ${theme.theme.toLowerCase()}.`);
+        const derived = fallbackThemes.slice(0, 3).map((theme) => `Participants aim to ${theme.theme.toLowerCase()}.`);
+        if (derived.length > 0) return derived;
+        return ['Primary job-to-be-done was not directly stated; consider probing in future sessions.'];
       })();
 
   const insights = params.existingInsights.length > 0
@@ -692,7 +753,10 @@ export async function computeAndPersistBatchSummary(
       updatedAt: statsMatch?.updatedAt
     });
     const themeCounts = aggregateThemesAcrossInterviews(perInterview);
-    const rawInsights = perInterview.flatMap((p) => p.insights || []).map((insight) => (insight || '').trim()).filter((text) => text.length > 0);
+    const rawInsights = perInterview
+      .flatMap((p) => p.insights || [])
+      .map((insight) => coerceTextValue(insight))
+      .filter((text) => text.length > 0);
 
     let summary = '';
     let overallProfile = '';

@@ -3,8 +3,10 @@ import {
   upsertInterviewSession,
   fetchInterviewSession,
   normalizeTranscriptEntries,
-  upsertInterviewChunks
+  upsertInterviewChunks,
+  type TranscriptChunkInput
 } from '@/lib/weaviate/weaviate-session';
+import { batchEnrichTranscriptChunks } from '@/lib/analysis/enrich-transcript';
 
 // Global session storage declaration
 declare global {
@@ -115,7 +117,8 @@ export async function POST(request: NextRequest) {
       sessionId,
       transcript,
       beyondPresenceAgentId,
-      beyondPresenceSessionId
+      beyondPresenceSessionId,
+      participantEmail
     } = await request.json();
 
     console.log('🛰️ [UPDATE TRANSCRIPT] Incoming request', {
@@ -193,18 +196,52 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    const normalizedEmail =
+      typeof participantEmail === 'string' && participantEmail.trim().includes('@')
+        ? participantEmail.trim().toLowerCase()
+        : undefined;
+
+    const latestSnapshot = sessions.get(sessionId);
+    const baseSession =
+      latestSnapshot && latestSnapshot !== session ? latestSnapshot : session;
+
     const updatedSession = {
-      ...session,
+      ...baseSession,
       transcript: combinedTranscript,
-      beyondPresenceAgentId: beyondPresenceAgentId || session.beyondPresenceAgentId,
+      beyondPresenceAgentId: beyondPresenceAgentId || baseSession.beyondPresenceAgentId,
       beyondPresenceSessionId:
-        beyondPresenceSessionId || session.beyondPresenceSessionId,
+        beyondPresenceSessionId || baseSession.beyondPresenceSessionId,
       status:
-        session.status === 'created' || session.status === 'in_progress'
+        baseSession.status === 'created' || baseSession.status === 'in_progress'
           ? 'in_progress'
-          : session.status,
-      startTime: session.startTime || new Date().toISOString()
+          : baseSession.status,
+      startTime: baseSession.startTime || new Date().toISOString()
     };
+
+    if (
+      normalizedEmail &&
+      normalizedEmail !== (baseSession.participantEmail || '').toLowerCase()
+    ) {
+      updatedSession.participantEmail = normalizedEmail;
+    }
+
+    if (
+      latestSnapshot &&
+      latestSnapshot !== session
+    ) {
+      if (
+        typeof latestSnapshot.status === 'string' &&
+        latestSnapshot.status.toLowerCase() === 'completed'
+      ) {
+        updatedSession.status = latestSnapshot.status;
+      }
+      if (
+        latestSnapshot.psychometricProfile &&
+        !updatedSession.psychometricProfile
+      ) {
+        updatedSession.psychometricProfile = latestSnapshot.psychometricProfile;
+      }
+    }
 
     // Update in memory store and persist to Weaviate
     sessions.set(sessionId, updatedSession);
@@ -218,22 +255,44 @@ export async function POST(request: NextRequest) {
 
       if (timestampedNewEntries.length > 0 && weaviateSessionId) {
         try {
+          // Enrich transcript entries with analysis (emotion, contradiction, category, guardrails)
+          const enrichedEntries = await batchEnrichTranscriptChunks(
+            timestampedNewEntries.map((entry) => ({
+              speaker: entry.speaker,
+              text: entry.text,
+              timestamp: entry.timestamp,
+              turnIndex: combinedTranscript.indexOf(entry),
+              summary: (entry as any).summary,
+              keywords: (entry as any).keywords,
+              sentiment: (entry as any).sentiment
+            })) as TranscriptChunkInput[],
+            {
+              sessionId,
+              researchGoal: baseSession.researchGoal,
+              sensitivity: baseSession.sensitivity || 'medium',
+              previousMood: baseSession.transcript
+                ?.filter((e: any) => e.speaker === 'participant' || e.speaker === 'user')
+                .slice(-1)[0]?.participantMood
+            }
+          );
+
           const chunksInserted = await upsertInterviewChunks(
             sessionId,
             weaviateSessionId,
-            timestampedNewEntries
+            enrichedEntries
           );
-          console.log('✅ [UPDATE TRANSCRIPT] Stored new transcript chunks', {
+          console.log('✅ [UPDATE TRANSCRIPT] Stored new enriched transcript chunks', {
             sessionId,
             newEntries: timestampedNewEntries.length,
+            enrichedEntries: enrichedEntries.length,
             chunksInserted
           });
           const previousSummary =
-            session.summaries?.[0] ||
-            (session.summary
+            baseSession.summaries?.[0] ||
+            (baseSession.summary
               ? {
-                  summary: session.summary,
-                  insights: session.keyFindings || []
+                  summary: baseSession.summary,
+                  insights: baseSession.keyFindings || []
                 }
               : null);
           await updateSessionSummary({

@@ -29,6 +29,13 @@ export type TranscriptChunkInput = {
   partNumber?: number;
   totalParts?: number;
   originalMessageId?: string;
+  // New fields for advanced interview features
+  emotionScore?: number;
+  energyScore?: number;
+  participantMood?: string;
+  category?: string; // 'goal', 'friction', 'workaround', 'neutral'
+  contradictionFlags?: string[];
+  guardrailTriggers?: string[];
 };
 
 export type FullTranscriptEntry = {
@@ -182,6 +189,8 @@ function parseTranscriptJson(json: string | null | undefined): FullTranscriptEnt
 export async function upsertInterviewSession(session: any) {
   const weaviateClient = getWeaviateClient();
 
+  await ensureSchemaClass('InterviewSession');
+
   console.log('🛰️ [WEAVIATE] Upserting InterviewSession', {
     sessionId: session.sessionId,
     status: session.status,
@@ -222,7 +231,7 @@ export async function upsertInterviewSession(session: any) {
   const existing = result.data?.Get?.InterviewSession?.[0];
   const sessionData = buildInterviewSessionPayload(session);
 
-  const references = researchGoalReference ? { researchGoal: researchGoalReference } : undefined;
+  const references = researchGoalReference ? { researchGoalRef: researchGoalReference } : undefined;
 
   if (existing?._additional?.id) {
     await updateObjectWithReferences(
@@ -353,7 +362,14 @@ export async function upsertInterviewChunks(
       turnIndex:
         typeof entry.turnIndex === 'number' && !Number.isNaN(entry.turnIndex)
           ? entry.turnIndex
-          : index
+          : index,
+      // New fields for advanced interview features
+      emotionScore: typeof entry.emotionScore === 'number' ? entry.emotionScore : undefined,
+      energyScore: typeof entry.energyScore === 'number' ? entry.energyScore : undefined,
+      participantMood: entry.participantMood || undefined,
+      category: entry.category || undefined,
+      contradictionFlags: Array.isArray(entry.contradictionFlags) ? entry.contradictionFlags : undefined,
+      guardrailTriggers: Array.isArray(entry.guardrailTriggers) ? entry.guardrailTriggers : undefined
     };
 
     const embedding =
@@ -750,6 +766,84 @@ export async function resolveWeaviateSessionId(sessionId: string): Promise<strin
     .do();
 
   return result.data?.Get?.InterviewSession?.[0]?._additional?.id || null;
+}
+
+export async function fetchInterviewSessionByAgentId(agentId: string): Promise<any | null> {
+  const weaviateClient = getWeaviateClient();
+
+  if (!agentId || agentId.trim().length === 0) {
+    return null;
+  }
+
+  try {
+    const result = await weaviateClient.graphql
+      .get()
+      .withClassName('InterviewSession')
+      .withFields(`
+        sessionId
+        sessionUrl
+        researchGoal
+        targetAudience
+        duration
+        sensitivity
+        participantEmail
+        participantName
+        roomName
+        beyondPresenceAgentId
+        beyondPresenceSessionId
+        status
+        startTime
+        endTime
+        durationMinutes
+        script
+        transcript
+        insights
+        psychometricProfile
+        keyFindings
+        summary
+        createdAt
+        updatedAt
+        createdBy
+        tags
+        isPublic
+        accessCode
+        _additional { id }
+      `)
+      .withWhere({
+        path: ['beyondPresenceAgentId'],
+        operator: 'Equal',
+        valueText: agentId.trim()
+      })
+      .withSort([{ path: ['createdAt'], order: 'desc' }])
+      .withLimit(1)
+      .do();
+
+    const session = result.data?.Get?.InterviewSession?.[0];
+    if (!session) {
+      return null;
+    }
+
+    // Parse JSON fields
+    const parsedSession: any = {
+      ...session,
+      script: session.script ? (typeof session.script === 'string' ? JSON.parse(session.script) : session.script) : null,
+      transcript: session.transcript ? (typeof session.transcript === 'string' ? JSON.parse(session.transcript) : session.transcript) : [],
+      summaries: session.insights ? (typeof session.insights === 'string' ? JSON.parse(session.insights) : session.insights) : [],
+      psychometricProfile: session.psychometricProfile ? (typeof session.psychometricProfile === 'string' ? JSON.parse(session.psychometricProfile) : session.psychometricProfile) : null,
+      weaviateId: session._additional?.id || null
+    };
+
+    delete parsedSession._additional;
+    delete parsedSession.insights;
+
+    return parsedSession;
+  } catch (error) {
+    console.error('❌ [WEAVIATE] Failed to fetch session by agentId', {
+      agentId,
+      error: error instanceof Error ? error.message : String(error)
+    });
+    return null;
+  }
 }
 
 export async function upsertPsychometricProfile(

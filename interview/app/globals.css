@@ -41,10 +41,30 @@ textarea:focus::placeholder {
 /* Ensure input text is dark */
 input:not([type="checkbox"]):not([type="radio"]),
 textarea {
-  color: #111827 !important; /* gray-900 */
+  color: #04060d !important;
+  background-color: #ffffff !important;
+  caret-color: #04060d !important;
 }
 
 input:focus,
 textarea:focus {
-  color: #111827 !important; /* gray-900 */
+  color: #04060d !important;
+  background-color: #ffffff !important;
+  outline: none !important;
+  box-shadow: 0 0 0 2px rgba(34, 211, 238, 0.35) !important;
+}
+
+@layer utilities {
+  @keyframes shine {
+    0% {
+      background-position: 100%;
+    }
+    100% {
+      background-position: -100%;
+    }
+  }
+
+  .animate-shine {
+    animation: shine 5s linear infinite;
+  }
 }

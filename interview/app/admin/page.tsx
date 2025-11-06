@@ -1,11 +1,15 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
+import { useSearchParams, useRouter } from "next/navigation";
+import React, { useState, useEffect, useCallback, useMemo, Suspense } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { Send, Users, FileText, BarChart3, Settings } from "lucide-react";
-import AnalysisProgressBar from "../components/AnalysisProgressBar";
+import { Send, Users, FileText, BarChart3, Settings, Sparkles } from "lucide-react";
+import { SessionCard } from "./components/SessionCard";
+import SpotlightCard from "../components/ui/spotlight-card";
+import ShinyText from "../components/ui/shiny-text";
+import BatchSummaryPanel from "./batch-summary/BatchSummaryPanel";
 
 const researchGoalSchema = z.object({
   goal: z.string().min(10, "Please provide a more detailed research goal"),
@@ -23,8 +27,22 @@ interface ClarificationMessage {
   timestamp: Date;
 }
 
-export default function AdminDashboard() {
-  const [currentStep, setCurrentStep] = useState<"goal" | "clarification" | "script" | "sessions" | "analytics">("goal");
+function AdminDashboardContent() {
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  
+  // Initialize step from URL on mount, or default to "goal"
+  const getInitialStep = (): "goal" | "clarification" | "script" | "sessions" | "batch-summary" => {
+    const stepParam = searchParams?.get('step');
+    if (stepParam === 'sessions') return 'sessions';
+    if (stepParam === 'batch-summary') return 'batch-summary';
+    if (stepParam === 'goal') return 'goal';
+    if (stepParam === 'clarification') return 'clarification';
+    if (stepParam === 'script') return 'script';
+    return 'goal';
+  };
+  
+  const [currentStep, setCurrentStep] = useState<"goal" | "clarification" | "script" | "sessions" | "batch-summary">(getInitialStep());
   const [clarificationMessages, setClarificationMessages] = useState<ClarificationMessage[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
   const [clarificationHistory, setClarificationHistory] = useState<string[]>([]);
@@ -38,9 +56,58 @@ export default function AdminDashboard() {
   const [isLoadingSessions, setIsLoadingSessions] = useState(false);
   const [sessionsError, setSessionsError] = useState<string | null>(null);
   const pollingRef = React.useRef<NodeJS.Timeout | null>(null);
-  const [sessionFilter, setSessionFilter] = useState<'all' | 'completed' | 'in_progress' | 'created'>('all');
+  const [sessionFilter, setSessionFilter] = useState<'completed'>('completed');
   const [sessionQuery, setSessionQuery] = useState('');
   const [expandedSessionId, setExpandedSessionId] = useState<string | null>(null);
+  const clarificationInputRef = React.useRef<HTMLInputElement | null>(null);
+  const isInternalNavigation = React.useRef(false);
+
+  // Handle URL params for navigation (only on URL changes, not state changes)
+  useEffect(() => {
+    // If this was an internal navigation (button click), skip syncing URL -> state
+    if (isInternalNavigation.current) {
+      isInternalNavigation.current = false;
+      return;
+    }
+
+    const stepParam = searchParams?.get('step');
+    const sessionParam = searchParams?.get('session');
+
+    // Determine what step the URL wants
+    let urlStep: "goal" | "clarification" | "script" | "sessions" | "batch-summary" | null = null;
+    if (stepParam === 'sessions') {
+      urlStep = 'sessions';
+    } else if (stepParam === 'batch-summary') {
+      urlStep = 'batch-summary';
+    } else if (stepParam === 'goal') {
+      urlStep = 'goal';
+    } else if (stepParam === 'clarification') {
+      urlStep = 'clarification';
+    } else if (stepParam === 'script') {
+      urlStep = 'script';
+    } else if (!stepParam) {
+      // No step param means default to 'goal'
+      urlStep = 'goal';
+    }
+
+    // Only update if URL step differs from current state
+    if (urlStep && urlStep !== currentStep) {
+      setCurrentStep(urlStep);
+    }
+
+    // Handle session expansion for URL navigation
+    if (sessionParam && urlStep === 'sessions') {
+      setExpandedSessionId(sessionParam);
+      // Scroll to session after a brief delay to allow rendering
+      setTimeout(() => {
+        const element = document.querySelector(`[data-session-id="${sessionParam}"]`);
+        if (element) {
+          element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      }, 300);
+    }
+  }, [searchParams]); // Only react to URL changes, NOT state changes
+
 
   const form = useForm<ResearchGoalForm>({
     resolver: zodResolver(researchGoalSchema),
@@ -134,6 +201,104 @@ export default function AdminDashboard() {
       }
     };
   }, [sessionsData, currentStep, loadSessions]);
+
+
+  const completedStatuses = useMemo(
+    () => new Set(['completed', 'complete', 'finished', 'analyzed', 'analysed']),
+    []
+  );
+
+
+  const filteredSessions = useMemo(() => {
+    const query = sessionQuery.trim().toLowerCase();
+    return sessionsData
+      .slice()
+      .filter((session) => !!session)
+      .filter((session) => {
+        const statusRaw = (session.status || 'created').toString().toLowerCase();
+        if (!completedStatuses.has(statusRaw)) {
+          return false;
+        }
+        if (sessionFilter === 'completed') {
+          return completedStatuses.has(statusRaw);
+        }
+        return true;
+      })
+      .filter((session) => {
+        if (!query) return true;
+        return (
+          (session.researchGoal || '').toLowerCase().includes(query) ||
+          (session.sessionId || '').toLowerCase().includes(query) ||
+          (session.participantEmail || '').toLowerCase().includes(query)
+        );
+      })
+      .sort((a, b) =>
+        new Date(b.updatedAt || b.createdAt || 0).getTime() -
+        new Date(a.updatedAt || a.createdAt || 0).getTime()
+      );
+  }, [sessionsData, sessionFilter, sessionQuery, completedStatuses]);
+
+  const groupedSessions = useMemo(() => {
+    const groups = new Map<
+      string,
+      {
+        key: string;
+        title: string;
+        subtitle?: string;
+        sortWeight: number;
+        sessions: any[];
+      }
+    >();
+
+    filteredSessions.forEach((session) => {
+      const key = 'ungrouped';
+      let group = groups.get(key);
+      if (!group) {
+        group = {
+          key,
+          title: 'Individual Sessions',
+          subtitle: undefined,
+          sortWeight: 1,
+          sessions: [],
+        };
+        groups.set(key, group);
+      }
+      group.sessions.push(session);
+    });
+
+    return Array.from(groups.values()).sort((a, b) => {
+      if (a.sortWeight !== b.sortWeight) {
+        return a.sortWeight - b.sortWeight;
+      }
+      return a.title.localeCompare(b.title);
+    });
+  }, [filteredSessions]);
+
+  const formatDateTime = (value?: string) => {
+    if (!value) return '—';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+      return value;
+    }
+    return date.toLocaleString(undefined, {
+      dateStyle: 'medium',
+      timeStyle: 'short'
+    });
+  };
+
+  const renderSessionCard = (session: any) => (
+    <SessionCard
+      key={session?.sessionId || session?.id}
+      session={session}
+      expanded={expandedSessionId === (session?.sessionId || session?.id)}
+      onToggle={() =>
+        setExpandedSessionId((prev) =>
+          prev === (session?.sessionId || session?.id) ? null : (session?.sessionId || session?.id)
+        )
+      }
+      formatDateTime={formatDateTime}
+    />
+  );
 
   const handleSubmitGoal = async (data: ResearchGoalForm) => {
     setIsGenerating(true);
@@ -368,112 +533,155 @@ export default function AdminDashboard() {
     }
   };
 
+  const primaryActionClasses =
+    "inline-flex items-center gap-2 rounded-full bg-gradient-to-r from-cyan-400 via-emerald-400 to-teal-300 px-5 py-2 text-sm font-semibold text-[#050013] shadow-lg shadow-cyan-900/40 transition-all duration-200 hover:-translate-y-[1px] hover:shadow-xl focus:outline-none focus:ring-2 focus:ring-cyan-400/60 disabled:from-zinc-600 disabled:via-zinc-500 disabled:to-zinc-600 disabled:text-zinc-200 disabled:opacity-80 disabled:cursor-not-allowed";
+  const secondaryActionClasses =
+    "inline-flex items-center justify-center gap-2 rounded-full border border-zinc-700/60 bg-transparent px-5 py-2 text-sm font-medium text-zinc-200 transition-all hover:border-cyan-400/60 hover:text-white focus:outline-none focus:ring-2 focus:ring-cyan-400/40 disabled:opacity-60 disabled:cursor-not-allowed";
+  const inputClasses =
+    "w-full rounded-xl border border-zinc-700/60 bg-white/5 px-3 py-2 text-base text-white placeholder:text-zinc-300 focus:border-cyan-400/60 focus:outline-none focus:ring-2 focus:ring-cyan-400/40 backdrop-blur-sm";
+  const labelClasses = "block text-sm font-medium text-zinc-300 mb-2";
+
   const navigationItems = [
     { id: "goal", label: "Research Goal", icon: FileText },
     { id: "clarification", label: "Clarification", icon: Users },
     { id: "script", label: "Interview Script", icon: FileText },
-    { id: "sessions", label: "Sessions", icon: Users },
-    { id: "analytics", label: "Analytics", icon: BarChart3, href: "/admin/analytics" },
-    { id: "batch-summary", label: "Batch Summary", icon: BarChart3, href: "/admin/batch-summary" },
+    { id: "batch-summary", label: "Batch Summary", icon: BarChart3 },
   ];
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <div className="bg-white shadow-sm border-b">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center py-6">
-            <div>
-              <h1 className="text-3xl font-bold text-gray-900">Admin Dashboard</h1>
-              <p className="text-gray-600">AI Interview Assistant</p>
-            </div>
-            <div className="flex items-center space-x-4">
-              <button className="flex items-center px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50">
-                <Settings className="h-4 w-4 mr-2" />
-                Settings
-              </button>
-            </div>
-          </div>
-        </div>
+    <div className="relative min-h-screen overflow-hidden bg-[#050013] text-zinc-100">
+      <div className="pointer-events-none absolute inset-0 -z-10 opacity-80">
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(76,29,149,0.45),_transparent_55%),radial-gradient(circle_at_bottom,_rgba(14,165,233,0.35),_transparent_60%)]" />
+        <div className="absolute inset-0 backdrop-blur-[120px]" />
       </div>
 
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <div className="flex gap-8">
-          {/* Sidebar Navigation */}
-          <div className="w-64 flex-shrink-0">
-            <nav className="space-y-2">
-              {navigationItems.map((item) => {
-                const Icon = item.icon;
-                return (
-                  <React.Fragment key={item.id}>
-                    {item.href ? (
-                      <a
-                        href={item.href}
-                        className="w-full flex items-center px-4 py-3 text-sm font-medium rounded-lg transition-colors text-gray-700 hover:bg-gray-100"
-                      >
-                        <Icon className="h-5 w-5 mr-3" />
-                        {item.label}
-                      </a>
-                    ) : (
-                      <button
-                        onClick={() => setCurrentStep(item.id as any)}
-                        className={`w-full flex items-center px-4 py-3 text-sm font-medium rounded-lg transition-colors ${
-                          currentStep === item.id
-                            ? "bg-blue-100 text-blue-700 border border-blue-200"
-                            : "text-gray-700 hover:bg-gray-100"
-                        }`}
-                      >
-                        <Icon className="h-5 w-5 mr-3" />
-                        {item.label}
-                      </button>
-                    )}
-                  </React.Fragment>
-                );
-              })}
-            </nav>
+      <header className="border-b border-zinc-800/60 bg-white/5 backdrop-blur">
+        <div className="max-w-[1400px] mx-auto flex flex-col gap-4 px-6 py-8 sm:flex-row sm:items-center sm:justify-between lg:px-10">
+          <div>
+            <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.35em] text-zinc-400">
+              <Sparkles className="h-4 w-4 text-cyan-300" />
+              <ShinyText text="Research Control Center" speed={4} className="text-sm" />
+            </div>
+            <h1 className="mt-4 bg-gradient-to-r from-white via-cyan-100 to-emerald-100 bg-clip-text text-3xl font-semibold text-transparent sm:text-4xl">
+              Admin Dashboard
+            </h1>
+            <p className="mt-2 text-sm text-zinc-400 sm:text-base">
+              Plan interviews, manage clarifications, launch sessions, and monitor insights in one flow.
+            </p>
           </div>
+          <div className="flex items-center gap-3">
+            <button className={secondaryActionClasses}>
+              <Settings className="h-4 w-4" />
+              Workspace Settings
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <div className="relative z-0 max-w-[1400px] mx-auto px-6 py-10 lg:px-10">
+        <div className="flex flex-col gap-10 lg:flex-row lg:items-start">
+          {/* Sidebar Navigation */}
+          <aside className="w-full flex-shrink-0 lg:w-72 xl:w-80">
+            <SpotlightCard className="border border-zinc-700/40 bg-white/8 p-6 lg:p-7 shadow-lg shadow-cyan-900/20" spotlightColor="rgba(255, 255, 255, 0.18)">
+              <nav className="space-y-3">
+                {navigationItems.map((item) => {
+                  const Icon = item.icon;
+                  const isActive = currentStep === item.id;
+                  const sharedClasses =
+                    "group flex w-full items-center justify-between rounded-2xl border px-4 py-3 text-sm font-medium transition-all duration-200";
+
+                  return (
+                    <button
+                      key={item.id}
+                      onClick={() => {
+                        // Mark as internal navigation to prevent effect from overriding
+                        isInternalNavigation.current = true;
+                        // Update state
+                        setCurrentStep(item.id as any);
+                        // Update URL to keep them in sync (clear step param for internal navigation)
+                        const params = new URLSearchParams(searchParams?.toString() || '');
+                        if (item.id === 'goal') {
+                          // For goal, clear step param to use default
+                          params.delete('step');
+                        } else {
+                          params.set('step', item.id);
+                        }
+                        // Keep other params like goal and session
+                        router.replace(`/admin?${params.toString()}`, { scroll: false });
+                      }}
+                      className={`${sharedClasses} ${
+                        isActive
+                          ? "border-cyan-400/60 bg-cyan-500/10 text-white shadow-lg shadow-cyan-900/30"
+                          : "border-transparent text-zinc-300 hover:border-cyan-400/40 hover:bg-white/5 hover:text-white"
+                      }`}
+                    >
+                      <span className="flex items-center gap-3">
+                        <Icon
+                          className={`h-5 w-5 transition-colors ${
+                            isActive ? "text-cyan-200" : "text-cyan-200/60 group-hover:text-cyan-100"
+                          }`}
+                        />
+                        {item.label}
+                      </span>
+                      <span
+                        className={`h-2 w-2 rounded-full ${
+                          isActive ? "bg-cyan-300 shadow-[0_0_12px_rgba(34,211,238,0.65)]" : "bg-zinc-600"
+                        }`}
+                      />
+                    </button>
+                  );
+                })}
+              </nav>
+            </SpotlightCard>
+          </aside>
 
           {/* Main Content */}
-          <div className="flex-1">
+          <div className="flex-1 min-w-0 space-y-10">
             {currentStep === "goal" && (
-              <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-8">
-                <h2 className="text-2xl font-bold text-gray-900 mb-6">Define Research Goal</h2>
+              <div className="rounded-2xl border border-zinc-700/40 bg-white/8 p-8">
+                <div className="mb-8">
+                  <h2 className="text-2xl font-semibold text-white">Define Research Goal</h2>
+                  <p className="mt-2 max-w-2xl text-sm text-zinc-400">
+                    Capture the mission for this study. We’ll use it to guide clarifications, generate scripts, and
+                    ensure every interview stays on target.
+                  </p>
+                </div>
                 <form onSubmit={form.handleSubmit(handleSubmitGoal)} className="space-y-6">
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                    <label className={labelClasses}>
                       Research Goal *
                     </label>
                     <textarea
                       {...form.register("goal")}
                       rows={4}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                      placeholder="e.g., Discover how users approach personal finance management and what challenges they face..."
+                      className={`${inputClasses} h-32 resize-none`}
+                      placeholder="e.g., Understand how busy parents organize their evening routines and where friction appears."
                     />
                     {form.formState.errors.goal && (
-                      <p className="text-red-600 text-sm mt-1">{form.formState.errors.goal.message}</p>
+                      <p className="mt-2 text-sm text-red-400">{form.formState.errors.goal.message}</p>
                     )}
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                      <label className={labelClasses}>
                         Target Audience
                       </label>
                       <input
                         {...form.register("targetAudience")}
                         type="text"
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        className={inputClasses}
                         placeholder="e.g., Young professionals, Parents, Students"
                       />
                     </div>
 
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                      <label className={labelClasses}>
                         Duration (minutes)
                       </label>
                       <select
                         {...form.register("duration")}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        className={`${inputClasses} pr-8`}
                       >
                         <option value="5">5 minutes</option>
                         <option value="10">10 minutes</option>
@@ -484,12 +692,12 @@ export default function AdminDashboard() {
                     </div>
 
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                      <label className={labelClasses}>
                         Sensitivity Level
                       </label>
                       <select
                         {...form.register("sensitivity")}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        className={`${inputClasses} pr-8`}
                       >
                         <option value="low">Low</option>
                         <option value="medium">Medium</option>
@@ -502,19 +710,33 @@ export default function AdminDashboard() {
                     <button
                       type="submit"
                       disabled={isGenerating}
-                      className="flex items-center px-6 py-3 bg-blue-600 text-white font-medium rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                      className={primaryActionClasses}
                     >
                       {isGenerating ? (
                         <>
-                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                          <div className="h-4 w-4 animate-spin rounded-full border-b-2 border-[#050013]" />
                           Generating...
                         </>
                       ) : (
                         <>
-                          <Send className="h-4 w-4 mr-2" />
                           Start Clarification
+                          <Send className="h-4 w-4" />
                         </>
                       )}
+                    </button>
+                  </div>
+
+                  <div className="flex justify-end">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        form.reset();
+                        setClarificationMessages([]);
+                        setCurrentStep("clarification");
+                      }}
+                      className="text-sm text-zinc-400 transition-colors hover:text-zinc-200"
+                    >
+                      Skip clarification workflow
                     </button>
                   </div>
                 </form>
@@ -522,30 +744,35 @@ export default function AdminDashboard() {
             )}
 
             {currentStep === "clarification" && (
-              <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-8">
-                <h2 className="text-2xl font-bold text-gray-900 mb-6">Clarification Chat</h2>
-                
+              <div className="rounded-2xl border border-zinc-700/40 bg-white/8 p-8">
+                <div className="mb-6">
+                  <h2 className="text-2xl font-semibold text-white">Clarification Chat</h2>
+                  <p className="mt-2 text-sm text-zinc-400">
+                    Answer a few quick questions so the planning agent can tailor the interview flow.
+                  </p>
+                </div>
+
                 {error && (
-                  <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-md">
-                    <p className="text-red-700 text-sm">{error}</p>
+                  <div className="mb-4 rounded-2xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+                    {error}
                   </div>
                 )}
-                
-                <div className="space-y-4 mb-6 max-h-96 overflow-y-auto">
+
+                <div className="mb-6 max-h-96 space-y-4 overflow-y-auto pr-2">
                   {clarificationMessages.map((message) => (
                     <div
                       key={message.id}
                       className={`flex ${message.type === "user" ? "justify-end" : "justify-start"}`}
                     >
                       <div
-                        className={`max-w-xs lg:max-w-md px-4 py-2 rounded-lg ${
+                        className={`max-w-lg rounded-2xl border px-4 py-3 text-sm leading-relaxed backdrop-blur ${
                           message.type === "user"
-                            ? "bg-blue-600 text-white"
-                            : "bg-gray-100 text-gray-900"
+                            ? "border-cyan-400/50 bg-gradient-to-r from-cyan-500/30 via-emerald-500/20 to-cyan-400/30 text-white shadow-lg shadow-cyan-900/30"
+                            : "border-zinc-700/60 bg-white/5 text-zinc-200"
                         }`}
                       >
-                        <p className="text-sm">{message.content}</p>
-                        <p className="text-xs opacity-70 mt-1">
+                        <p>{message.content}</p>
+                        <p className="mt-2 text-xs text-zinc-400/80">
                           {message.timestamp.toLocaleTimeString()}
                         </p>
                       </div>
@@ -554,42 +781,42 @@ export default function AdminDashboard() {
                 </div>
                 
                 {isGenerating && (
-                  <div className="flex justify-start mb-4">
-                    <div className="bg-gray-100 text-gray-900 max-w-xs lg:max-w-md px-4 py-2 rounded-lg">
-                      <div className="flex items-center space-x-2">
-                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600"></div>
-                        <p className="text-sm">AI is thinking...</p>
-                      </div>
+                  <div className="mb-4 flex justify-start">
+                    <div className="flex items-center gap-2 rounded-2xl border border-cyan-400/40 bg-cyan-500/10 px-4 py-2 text-sm text-cyan-100">
+                      <div className="h-4 w-4 animate-spin rounded-full border-b-2 border-cyan-200" />
+                      AI is thinking...
                     </div>
                   </div>
                 )}
-                
-                <div className="flex space-x-2">
+
+                <div className="flex items-center gap-3">
                   <input
                     type="text"
                     placeholder="Type your response..."
                     disabled={isGenerating}
-                    className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed text-gray-900 placeholder:text-gray-500"
-                    onKeyPress={(e) => {
-                      if (e.key === "Enter" && !isGenerating) {
-                        const input = e.target as HTMLInputElement;
-                        if (input.value.trim()) {
-                          sendClarificationResponse(input.value);
-                          input.value = "";
+                    ref={clarificationInputRef}
+                    className={`${inputClasses} flex-1 disabled:cursor-not-allowed disabled:opacity-60`}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" && !isGenerating) {
+                        const value = event.currentTarget.value.trim();
+                        if (value) {
+                          event.preventDefault();
+                          sendClarificationResponse(value);
+                          event.currentTarget.value = "";
                         }
                       }
                     }}
                   />
                   <button
                     onClick={() => {
-                      const input = document.querySelector('input[placeholder="Type your response..."]') as HTMLInputElement;
-                      if (input.value.trim()) {
-                        sendClarificationResponse(input.value);
-                        input.value = "";
+                      const value = clarificationInputRef.current?.value?.trim();
+                      if (value) {
+                        sendClarificationResponse(value);
+                        clarificationInputRef.current!.value = "";
                       }
                     }}
                     disabled={isGenerating}
-                    className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-cyan-400/50 bg-cyan-500/20 text-cyan-100 transition-all hover:bg-cyan-400/30 focus:outline-none focus:ring-2 focus:ring-cyan-400/60 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     <Send className="h-4 w-4" />
                   </button>
@@ -598,106 +825,133 @@ export default function AdminDashboard() {
             )}
 
             {currentStep === "script" && (
-              <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-8">
-                <h2 className="text-2xl font-bold text-gray-900 mb-6">Interview Script</h2>
-                
+              <div className="rounded-2xl border border-zinc-700/40 bg-white/8 p-8">
+                <div className="mb-6 flex flex-col gap-2">
+                  <h2 className="text-2xl font-semibold text-white">Interview Script</h2>
+                  <p className="text-sm text-zinc-400">
+                    Review and approve the AI-generated plan. You can regenerate it or share the participant link once it feels right.
+                  </p>
+                </div>
+
                 {error && (
-                  <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-md">
-                    <p className="text-red-700 text-sm">{error}</p>
+                  <div className="mb-4 rounded-2xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+                    {error}
                   </div>
                 )}
-                
+
                 {isGeneratingScript && (
-                  <div className="flex items-center justify-center py-12">
-                    <div className="flex items-center space-x-3">
-                      <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600"></div>
-                      <p className="text-gray-600">Generating your personalized interview script...</p>
+                  <div className="flex items-center justify-center rounded-2xl border border-cyan-400/30 bg-cyan-500/10 py-12 text-sm text-cyan-100">
+                    <div className="flex items-center gap-3">
+                      <div className="h-6 w-6 animate-spin rounded-full border-b-2 border-cyan-200" />
+                      Generating your personalized interview script...
                     </div>
                   </div>
                 )}
-                
+
                 {interviewScript && !isGeneratingScript && (
-                  <div className="prose max-w-none">
-                    <div className="bg-blue-50 border border-blue-200 rounded-lg p-6 mb-6">
-                      <h3 className="text-lg font-semibold text-blue-900 mb-3">Introduction</h3>
-                      <p className="text-blue-800">
+                  <div className="space-y-8">
+                    <div className="rounded-2xl border border-cyan-400/30 bg-cyan-500/10 p-6 text-sm text-cyan-100 shadow-lg shadow-cyan-900/20">
+                      <h3 className="text-lg font-semibold text-white">Introduction</h3>
+                      <p className="mt-3 text-sm leading-relaxed text-cyan-50/90">
                         {interviewScript.introduction}
                       </p>
                     </div>
 
-                    <div className="space-y-6">
-                      <div>
-                        <h3 className="text-lg font-semibold text-gray-900 mb-3">Main Questions</h3>
-                        <div className="space-y-4">
-                          {interviewScript.questions?.map((question: any, index: number) => (
-                            <div key={question.id || index} className="border border-gray-200 rounded-lg p-4">
-                              <h4 className="font-medium text-gray-900 mb-2">
-                                {index + 1}. {question.topic || `Question ${index + 1}`}
-                              </h4>
-                              <p className="text-gray-700">"{question.text}"</p>
-                              {interviewScript.followUps && interviewScript.followUps[question.id] && (
-                                <div className="mt-2 text-sm text-gray-600">
-                                  <strong>Follow-ups:</strong> {interviewScript.followUps[question.id].join(', ')}
+                    <div className="space-y-4">
+                      <h3 className="text-lg font-semibold text-white">Main Questions</h3>
+                      <div className="grid gap-4 md:grid-cols-2">
+                        {interviewScript.questions?.map((question: any, index: number) => {
+                          const followUps: string[] =
+                            (interviewScript.followUps && interviewScript.followUps[question.id]) || [];
+                          return (
+                            <div
+                              key={question.id || index}
+                              className="rounded-2xl border border-zinc-700/60 bg-white/5 p-5 text-sm text-zinc-200 backdrop-blur"
+                            >
+                              <div className="flex items-start justify-between gap-4">
+                                <span className="text-xs font-semibold uppercase tracking-[0.3em] text-cyan-300/80">
+                                  {String(index + 1).padStart(2, '0')}
+                                </span>
+                                <span className="rounded-full border border-cyan-400/40 bg-cyan-500/10 px-3 py-1 text-xs text-cyan-100">
+                                  {question.topic || `Question ${index + 1}`}
+                                </span>
+                              </div>
+                              <p className="mt-3 text-base font-medium text-white">“{question.text}”</p>
+                              {followUps.length > 0 && (
+                                <div className="mt-3 space-y-2">
+                                  <p className="text-xs uppercase tracking-[0.2em] text-zinc-500">
+                                    Follow-ups
+                                  </p>
+                                  <div className="flex flex-wrap gap-2">
+                                    {followUps.map((follow: string, followIdx: number) => (
+                                      <span
+                                        key={`${question.id || index}-follow-${followIdx}`}
+                                        className="rounded-full border border-zinc-700/60 bg-zinc-900/70 px-3 py-1 text-xs text-zinc-300"
+                                      >
+                                        {follow}
+                                      </span>
+                                    ))}
+                                  </div>
                                 </div>
                               )}
                             </div>
-                          ))}
-                        </div>
+                          );
+                        })}
                       </div>
                     </div>
                   </div>
                 )}
                 
                 {!interviewScript && !isGeneratingScript && (
-                  <div className="text-center py-12">
-                    <p className="text-gray-500">Complete the clarification process to generate your interview script.</p>
+                  <div className="rounded-2xl border border-zinc-700/60 bg-white/5 py-12 text-center text-sm text-zinc-300">
+                    Complete the clarification process to generate your interview script.
                   </div>
                 )}
 
                 {interviewScript && !isGeneratingScript && (
                   <>
                     {sessionUrl && (
-                      <div className="mb-6 p-6 bg-green-50 border border-green-200 rounded-lg">
-                        <h3 className="text-lg font-semibold text-green-900 mb-3">Interview Link Generated!</h3>
-                        <p className="text-sm text-green-800 mb-3">
+                      <div className="mb-6 rounded-2xl border border-emerald-400/40 bg-emerald-500/10 p-6 text-emerald-100 shadow-lg shadow-emerald-900/20">
+                        <h3 className="text-lg font-semibold text-white mb-3">Interview Link Generated!</h3>
+                        <p className="text-sm text-emerald-50/80 mb-4">
                           Share this link with participants to start interviews:
                         </p>
-                        <div className="flex items-center space-x-2">
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
                           <input
                             type="text"
                             value={sessionUrl}
                             readOnly
-                            className="flex-1 px-4 py-2 bg-white border border-green-300 rounded-md text-sm font-mono"
+                            className="flex-1 rounded-xl border border-emerald-400/50 bg-[#0b1a22]/60 px-4 py-2 text-sm font-mono text-emerald-100 shadow-inner shadow-emerald-900/40"
                           />
                           <button
                             onClick={() => {
                               navigator.clipboard.writeText(sessionUrl);
                               alert('Link copied to clipboard!');
                             }}
-                            className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 text-sm"
+                            className="inline-flex items-center justify-center gap-2 rounded-full border border-emerald-300/60 bg-emerald-400/20 px-4 py-2 text-sm font-semibold text-emerald-50 transition hover:bg-emerald-400/30"
                           >
                             Copy Link
                           </button>
                         </div>
                       </div>
                     )}
-                    <div className="flex justify-end space-x-4 mt-8">
-                      <button 
+                    <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:justify-end">
+                      <button
                         onClick={() => {
                           setInterviewScript(null);
                           setSessionUrl(null);
                           generateInterviewScript("Regenerate interview script with current clarifications.");
                         }}
                         disabled={isGeneratingScript || isCreatingSession}
-                        className="px-6 py-3 border border-gray-300 text-gray-700 font-medium rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                        className={secondaryActionClasses}
                       >
                         Regenerate Script
                       </button>
                       {!sessionUrl && (
-                        <button 
+                        <button
                           onClick={handleApproveScript}
                           disabled={isCreatingSession}
-                          className="px-6 py-3 bg-green-600 text-white font-medium rounded-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                          className={primaryActionClasses}
                         >
                           {isCreatingSession ? 'Creating...' : 'Approve & Generate Link'}
                         </button>
@@ -709,29 +963,24 @@ export default function AdminDashboard() {
             )}
 
             {currentStep === "sessions" && (
-              <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-8">
-                <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
+              <div className="rounded-2xl border border-zinc-700/40 bg-white/8 p-8">
+                <div className="mb-8 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
                   <div>
-                    <h2 className="text-2xl font-bold text-gray-900">Interview Sessions</h2>
-                    <p className="text-sm text-gray-500">
-                      Review completed interviews, their summaries, and psychometric insights.
+                    <h2 className="text-2xl font-semibold text-white">Interview Sessions</h2>
+                    <p className="text-sm text-zinc-400">
+                      Review completed interviews, summaries, and psychometric insights.
                     </p>
                   </div>
-                  <div className="flex flex-col md:flex-row gap-3 md:items-center">
-                    <div className="flex rounded-md border border-gray-300 overflow-hidden">
-                      {([
-                        { id: 'all', label: 'All' },
-                        { id: 'completed', label: 'Completed' },
-                        { id: 'in_progress', label: 'In Progress' },
-                        { id: 'created', label: 'Created' },
-                      ] as const).map(tab => (
+                  <div className="flex flex-col gap-3 md:flex-row md:items-center">
+                    <div className="flex overflow-hidden rounded-2xl border border-zinc-700/60 bg-white/5">
+                      {([{ id: 'completed', label: 'Completed' }] as const).map((tab) => (
                         <button
                           key={tab.id}
                           onClick={() => setSessionFilter(tab.id)}
-                          className={`px-3 py-1.5 text-sm font-medium transition-colors ${
+                          className={`px-4 py-2 text-sm font-medium transition-all ${
                             sessionFilter === tab.id
-                              ? 'bg-gray-100 text-gray-900'
-                              : 'bg-white text-gray-600 hover:bg-gray-50'
+                              ? 'bg-cyan-500/20 text-white shadow-[inset_0_0_15px_rgba(34,211,238,0.25)]'
+                              : 'text-zinc-400 hover:bg-white/10 hover:text-white'
                           }`}
                         >
                           {tab.label}
@@ -742,13 +991,13 @@ export default function AdminDashboard() {
                       <input
                         value={sessionQuery}
                         onChange={(e) => setSessionQuery(e.target.value)}
-                        placeholder="Search by goal or session ID…"
-                        className="w-full md:w-64 px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        placeholder="Search by goal, session, or email…"
+                        className={`${inputClasses} w-full md:w-64`}
                       />
                       <button
                         onClick={() => loadSessions().catch(() => null)}
                         disabled={isLoadingSessions}
-                        className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                        className="inline-flex items-center justify-center gap-2 rounded-xl border border-zinc-700/60 px-4 py-2 text-sm font-medium text-zinc-200 transition hover:border-cyan-400/50 hover:text-white focus:outline-none focus:ring-2 focus:ring-cyan-400/40 disabled:cursor-not-allowed disabled:opacity-60"
                       >
                         {isLoadingSessions ? 'Refreshing…' : 'Refresh'}
                       </button>
@@ -757,307 +1006,92 @@ export default function AdminDashboard() {
                 </div>
 
                 {sessionsError && (
-                  <div className="mb-6 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                  <div className="mb-6 rounded-2xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-200">
                     {sessionsError}
                   </div>
                 )}
 
+
                 {isLoadingSessions ? (
-                  <div className="flex flex-col items-center justify-center py-16 text-gray-500">
-                    <div className="h-10 w-10 border-4 border-blue-200 border-t-blue-500 rounded-full animate-spin mb-4" />
+                  <div className="flex flex-col items-center justify-center rounded-2xl border border-zinc-700/60 bg-white/5 py-16 text-sm text-zinc-300">
+                    <div className="mb-4 h-10 w-10 animate-spin rounded-full border-4 border-cyan-400/40 border-t-cyan-300" />
                     Loading sessions…
                   </div>
                 ) : sessionsData.length === 0 ? (
-                  <div className="text-center py-12">
-                    <Users className="h-12 w-12 text-gray-400 mx-auto mb-4" />
-                    <p className="text-gray-500">
-                      No sessions recorded yet. Approve a script to start collecting responses.
-                    </p>
+                  <div className="rounded-2xl border border-zinc-700/60 bg-white/5 py-12 text-center text-zinc-400">
+                    <Users className="mx-auto mb-4 h-12 w-12 text-zinc-500" />
+                    No sessions recorded yet. Approve a script to start collecting responses.
+                  </div>
+                ) : filteredSessions.length === 0 ? (
+                  <div className="rounded-2xl border border-zinc-700/60 bg-white/5 py-12 text-center text-zinc-400">
+                    No completed sessions match the current filters.
                   </div>
                 ) : (
-                  <div className="space-y-6">
-                    {sessionsData
-                      .slice()
-                      .filter((session) => !!session)
-                      .filter((session) => {
-                        if (sessionFilter === 'all') return true;
-                        const status = session.status || 'created';
-                        return status === sessionFilter;
-                      })
-                      .filter((session) => {
-                        const q = sessionQuery.trim().toLowerCase();
-                        if (!q) return true;
-                        return (
-                          (session.researchGoal || '').toLowerCase().includes(q) ||
-                          (session.sessionId || '').toLowerCase().includes(q)
-                        );
-                      })
-                      .sort(
-                        (a, b) =>
-                          new Date(b.updatedAt || b.createdAt || 0).getTime() -
-                          new Date(a.updatedAt || a.createdAt || 0).getTime()
-                      )
-                      .map((session) => {
-                        const status = session.status || 'created';
-                        const statusClasses =
-                          status === 'completed'
-                            ? 'bg-green-100 text-green-800 border border-green-200'
-                            : status === 'in_progress'
-                              ? 'bg-blue-100 text-blue-800 border border-blue-200'
-                              : 'bg-gray-100 text-gray-700 border border-gray-200';
+                  <div className="space-y-8">
+                    {groupedSessions.map((group) => {
+                      const groupUpdatedAt =
+                        group.sessions[0]?.updatedAt ||
+                        group.sessions[0]?.createdAt;
+                      const updatedAtLabel = groupUpdatedAt ? formatDateTime(groupUpdatedAt) : undefined;
 
-                        const transcriptEntries = Array.isArray(session.transcript)
-                          ? session.transcript
-                          : [];
-                        const transcriptCount = transcriptEntries.length;
-
-                        const summaryRecord =
-                          session.summaries?.[0] ||
-                          (session.summary
-                            ? { summary: session.summary, keyInsights: session.keyFindings }
-                            : null);
-
-                        const summaryText = summaryRecord?.summary || 'Summary not yet generated.';
-                        const keyInsights: string[] = Array.isArray(summaryRecord?.keyInsights)
-                          ? summaryRecord.keyInsights
-                          : Array.isArray(session.keyFindings)
-                            ? session.keyFindings
-                            : [];
-
-                        const keyThemes: string[] = Array.isArray(summaryRecord?.keyThemes)
-                          ? summaryRecord.keyThemes
-                          : [];
-
-                        const profile = session.psychometricProfile || null;
-                        const traitEntries = profile?.traits
-                          ? Object.entries(profile.traits)
-                          : [];
-
-                        // Determine if analysis is complete
-                        const hasSummary = summaryRecord && summaryRecord.summary && summaryRecord.summary !== 'Summary not yet generated.';
-                        const hasPsychometricProfile = profile && traitEntries.length > 0;
-
-                        const formatDateTime = (value?: string) => {
-                          if (!value) return '—';
-                          const date = new Date(value);
-                          if (Number.isNaN(date.getTime())) {
-                            return value;
-                          }
-                          return date.toLocaleString(undefined, {
-                            dateStyle: 'medium',
-                            timeStyle: 'short'
-                          });
-                        };
-
-                        const isExpanded = expandedSessionId === session.sessionId;
-                        return (
-                          <div
-                            key={session.sessionId}
-                            className="border border-gray-200 rounded-lg p-6 shadow-sm hover:shadow transition-shadow duration-150"
-                          >
-                            <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-                              <div>
-                                <div className="flex items-center gap-3 mb-2">
-                                  <span className={`px-3 py-1 rounded-full text-xs font-semibold ${statusClasses}`}>
-                                    {status.replace(/_/g, ' ').toUpperCase()}
-                                  </span>
-                                  <span className="text-sm text-gray-500">
-                                    Updated {formatDateTime(session.updatedAt)}
-                                  </span>
-                                </div>
-                                <h3 className="text-xl font-semibold text-gray-900">
-                                  {session.researchGoal || 'Untitled research goal'}
-                                </h3>
-                                <p className="mt-1 text-sm text-gray-500">
-                                  Session ID: {session.sessionId}
-                                </p>
-                                {session.sessionUrl && (
-                                  <a
-                                    href={session.sessionUrl}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="mt-2 inline-flex items-center text-sm text-blue-600 hover:text-blue-700"
-                                  >
-                                    Open respondent link
-                                  </a>
-                                )}
-                              </div>
-                              <div className="flex flex-col gap-1 items-start text-sm text-gray-600">
-                                <p>
-                                  <span className="font-medium text-gray-700">Target audience:</span>{' '}
-                                  {session.targetAudience || '—'}
-                                </p>
-                                <p>
-                                  <span className="font-medium text-gray-700">Duration:</span>{' '}
-                                  {session.durationMinutes
-                                    ? `${session.durationMinutes} min`
-                                    : `${session.duration || 30} min planned`}
-                                </p>
-                                <p>
-                                  <span className="font-medium text-gray-700">Transcript entries:</span>{' '}
-                                  {transcriptCount}
-                                </p>
-                                <p>
-                                  <span className="font-medium text-gray-700">Completed:</span>{' '}
-                                  {formatDateTime(session.endTime)}
-                                </p>
-                                <button
-                                  onClick={() => setExpandedSessionId(isExpanded ? null : session.sessionId)}
-                                  className="mt-2 inline-flex items-center text-blue-600 hover:text-blue-700"
-                                >
-                                  {isExpanded ? 'Hide details' : 'View details'}
-                                </button>
-                              </div>
+                      return (
+                        <section key={group.key} className="space-y-4">
+                          <header className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                            <div className="flex items-center gap-3">
+                              <h3 className="text-lg font-semibold text-white">
+                                {group.title}
+                              </h3>
                             </div>
-
-                            <div className={`mt-6 ${isExpanded ? '' : 'hidden'}`}>
-                              {/* Show progress bar if analysis is not complete, otherwise show results */}
-                              {(!hasSummary || !hasPsychometricProfile) && status === 'completed' ? (
-                                <AnalysisProgressBar
-                                  sessionId={session.sessionId}
-                                  sessionStatus={status}
-                                  hasTranscript={transcriptCount > 0}
-                                  hasSummary={hasSummary}
-                                  hasPsychometricProfile={hasPsychometricProfile}
-                                />
-                              ) : (
-                                <div className="grid gap-6 lg:grid-cols-2">
-                                  <div>
-                                    <h4 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-2">
-                                      Summary
-                                    </h4>
-                                    <p className="text-gray-700 leading-relaxed">{summaryText}</p>
-
-                                    {(keyThemes.length > 0 || keyInsights.length > 0) && (
-                                      <div className="mt-4 space-y-3">
-                                        {keyThemes.length > 0 && (
-                                          <div>
-                                            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">
-                                              Key Themes
-                                            </p>
-                                            <div className="flex flex-wrap gap-2">
-                                              {keyThemes.map((theme: string) => (
-                                                <span
-                                                  key={theme}
-                                                  className="inline-flex items-center px-3 py-1 rounded-full bg-gray-100 text-gray-700 text-xs font-medium"
-                                                >
-                                                  {theme}
-                                                </span>
-                                              ))}
-                                            </div>
-                                          </div>
-                                        )}
-
-                                        {keyInsights.length > 0 && (
-                                          <div>
-                                            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">
-                                              Key Insights
-                                            </p>
-                                            <ul className="list-disc list-inside text-sm text-gray-700 space-y-1">
-                                              {keyInsights.map((insight: string, idx: number) => (
-                                                <li key={`${session.sessionId}-insight-${idx}`}>{insight}</li>
-                                              ))}
-                                            </ul>
-                                          </div>
-                                        )}
-                                      </div>
-                                    )}
-                                  </div>
-
-                                  <div>
-                                    <h4 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-2">
-                                      Psychometric Profile
-                                    </h4>
-                                    {profile && traitEntries.length > 0 ? (
-                                      <div className="space-y-3">
-                                        <div className="grid gap-3 sm:grid-cols-2">
-                                          {traitEntries.map(([trait, info]: [string, any]) => {
-                                            const rawScore = Number(info?.score ?? info ?? 0);
-                                            const score = Number.isFinite(rawScore) ? rawScore : 0;
-                                            const normalizedScore = Math.min(Math.max(score, 0), 100);
-                                            const explanation = info?.explanation || '';
-                                            return (
-                                              <div
-                                                key={`${session.sessionId}-${trait}`}
-                                                className="border border-gray-200 rounded-md p-3"
-                                              >
-                                                <div className="flex items-center justify-between mb-1">
-                                                  <span className="text-sm font-medium text-gray-700 capitalize">
-                                                    {trait}
-                                                  </span>
-                                                  <span className="text-sm font-semibold text-gray-900">
-                                                    {Number.isFinite(score) ? Math.round(score) : '—'}
-                                                  </span>
-                                                </div>
-                                                <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
-                                                  <div
-                                                    className="h-full bg-blue-500 rounded-full transition-all"
-                                                    style={{
-                                                      width: `${normalizedScore}%`
-                                                    }}
-                                                  />
-                                                </div>
-                                                {explanation && (
-                                                  <p className="mt-2 text-xs text-gray-500 leading-snug">
-                                                    {explanation}
-                                                  </p>
-                                                )}
-                                              </div>
-                                            );
-                                          })}
-                                        </div>
-                                        {profile?.overallProfile && (
-                                          <div className="border border-blue-100 bg-blue-50 text-blue-900 rounded-md p-3 text-sm">
-                                            <p className="font-semibold text-blue-800 mb-1">
-                                              Overall Profile
-                                            </p>
-                                            <p className="leading-relaxed">{profile.overallProfile}</p>
-                                          </div>
-                                        )}
-                                        {profile?.keyInsights && Array.isArray(profile.keyInsights) && profile.keyInsights.length > 0 && (
-                                          <div>
-                                            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">
-                                              Personality Insights
-                                            </p>
-                                            <ul className="list-disc list-inside text-sm text-gray-700 space-y-1">
-                                              {profile.keyInsights.map((insight: string, idx: number) => (
-                                                <li key={`${session.sessionId}-profile-insight-${idx}`}>
-                                                  {insight}
-                                                </li>
-                                              ))}
-                                            </ul>
-                                          </div>
-                                        )}
-                                      </div>
-                                    ) : (
-                                      <div className="border border-dashed border-gray-200 rounded-md p-4 text-sm text-gray-500">
-                                        Psychometric analysis is not yet available for this session.
-                                      </div>
-                                    )}
-                                  </div>
-                                </div>
+                            <div className="flex flex-wrap items-center gap-2 text-xs text-zinc-400">
+                              <span className="rounded-full border border-zinc-700/60 bg-white/5 px-3 py-1 font-medium text-zinc-200">
+                                {group.sessions.length} {group.sessions.length === 1 ? "session" : "sessions"}
+                              </span>
+                              {updatedAtLabel && (
+                                <span className="rounded-full border border-zinc-700/60 bg-white/5 px-3 py-1 font-medium text-zinc-200">
+                                  Updated {updatedAtLabel}
+                                </span>
                               )}
                             </div>
+                          </header>
+                          <div className="space-y-4">
+                            {group.sessions.map((session) => renderSessionCard(session))}
                           </div>
-                        );
-                      })}
+                        </section>
+                      );
+                    })}
                   </div>
                 )}
               </div>
             )}
 
-            {currentStep === "analytics" && (
-              <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-8">
-                <h2 className="text-2xl font-bold text-gray-900 mb-6">Analytics & Insights</h2>
-                <div className="text-center py-12">
-                  <BarChart3 className="h-12 w-12 text-gray-400 mx-auto mb-4" />
-                  <p className="text-gray-500">Analytics will appear here once you have completed interviews.</p>
-                </div>
+            {currentStep === "batch-summary" && (
+              <div className="rounded-2xl border border-zinc-700/40 bg-white/8 p-8">
+                <BatchSummaryPanel
+                  embedded={true}
+                  focusSessionId={searchParams?.get('session') || null}
+                  focusGoalId={searchParams?.get('goal') || null}
+                />
               </div>
             )}
+            
           </div>
         </div>
       </div>
     </div>
+  );
+}
+
+export default function AdminDashboard() {
+  return (
+    <Suspense fallback={
+      <div className="relative min-h-screen overflow-hidden bg-[#050013] text-zinc-100 flex items-center justify-center">
+        <div className="text-center">
+          <div className="h-8 w-8 animate-spin rounded-full border-2 border-cyan-400/40 border-t-cyan-300 mx-auto mb-4" />
+          <p className="text-sm text-zinc-400">Loading...</p>
+        </div>
+      </div>
+    }>
+      <AdminDashboardContent />
+    </Suspense>
   );
 }
