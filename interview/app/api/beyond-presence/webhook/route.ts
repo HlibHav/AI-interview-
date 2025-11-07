@@ -366,39 +366,45 @@ export async function POST(request: NextRequest) {
     `${request.nextUrl.protocol}//${request.nextUrl.host}`;
 
   if (messages.length > 0 && resolvedSessionId) {
-    try {
-      const response = await fetch(`${baseUrl}/api/sessions/update-transcript`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          sessionId: resolvedSessionId,
-          beySessionId,
-          transcript: messages,
-          beyondPresenceAgentId: beyAgentId
-        })
-      });
+    console.log('📤 [BEY WEBHOOK] Forwarding transcript payload', {
+      sessionId: resolvedSessionId,
+      beySessionId,
+      messages: messages.length
+    });
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error('❌ [BEY WEBHOOK] Failed to forward transcript payload', {
-          sessionId: resolvedSessionId,
-          beySessionId,
-          status: response.status,
-          statusText: response.statusText,
-          errorText
-        });
-      } else {
-        console.log('✅ [BEY WEBHOOK] Forwarded messages to transcript updater', {
-          sessionId: resolvedSessionId,
-          beySessionId,
-          messages: messages.length
-        });
-      }
-    } catch (error) {
-      console.error('❌ [BEY WEBHOOK] Error forwarding transcript payload', error);
-    }
+    void fetch(`${baseUrl}/api/sessions/update-transcript`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        sessionId: resolvedSessionId,
+        beySessionId,
+        transcript: messages,
+        beyondPresenceAgentId: beyAgentId
+      })
+    })
+      .then(async (response) => {
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error('❌ [BEY WEBHOOK] Failed to forward transcript payload', {
+            sessionId: resolvedSessionId,
+            beySessionId,
+            status: response.status,
+            statusText: response.statusText,
+            errorText
+          });
+        } else {
+          console.log('✅ [BEY WEBHOOK] Transcript payload accepted', {
+            sessionId: resolvedSessionId,
+            beySessionId,
+            messages: messages.length
+          });
+        }
+      })
+      .catch((error) => {
+        console.error('❌ [BEY WEBHOOK] Error forwarding transcript payload', error);
+      });
   }
 
   const endedStatusTokens = ['ended', 'completed', 'finished', 'stopped', 'closed', 'terminated', 'disconnected', 'success'];
