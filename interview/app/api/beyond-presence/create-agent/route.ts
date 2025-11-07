@@ -2,6 +2,19 @@ import { NextRequest, NextResponse } from 'next/server';
 import BeyondPresence from '@bey-dev/sdk';
 import fs from 'fs';
 import path from 'path';
+import { fetchInterviewSession, upsertInterviewSession } from '@/lib/weaviate/weaviate-session';
+
+declare global {
+  // eslint-disable-next-line no-var
+  var sessionsStore: Map<string, any> | undefined;
+}
+
+let sessions: Map<string, any>;
+
+if (typeof global.sessionsStore === 'undefined') {
+  global.sessionsStore = new Map<string, any>();
+}
+sessions = global.sessionsStore;
 
 function readEnvFileValue(fileName: string, key: string): string | undefined {
   try {
@@ -50,9 +63,62 @@ function loadEnvValue(key: string): string | undefined {
   return undefined;
 }
 
+async function persistAgentForSession(sessionId: string, agentId: string) {
+  if (!sessionId || !agentId) {
+    return;
+  }
+
+  let session = sessions.get(sessionId);
+  if (!session) {
+    try {
+      session = await fetchInterviewSession(sessionId);
+      if (session) {
+        sessions.set(sessionId, session);
+      }
+    } catch (error) {
+      console.warn('⚠️ [BEY CREATE AGENT] Failed to load session for agent persistence', {
+        sessionId,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
+
+  if (!session) {
+    console.warn('⚠️ [BEY CREATE AGENT] Session not found while persisting agent id', {
+      sessionId
+    });
+    return;
+  }
+
+  if (session.beyondPresenceAgentId === agentId) {
+    return;
+  }
+
+  const updatedSession = {
+    ...session,
+    beyondPresenceAgentId: agentId,
+    updatedAt: new Date().toISOString()
+  };
+
+  sessions.set(sessionId, updatedSession);
+  try {
+    await upsertInterviewSession(updatedSession);
+    console.log('✅ [BEY CREATE AGENT] Persisted agent id for session', {
+      sessionId,
+      agentId
+    });
+  } catch (error) {
+    console.error('⚠️ [BEY CREATE AGENT] Failed to persist agent id to Weaviate', {
+      sessionId,
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
+}
+
 export async function POST(request: NextRequest) {
   try {
     const { 
+      sessionId,
       name, 
       systemPrompt, 
       language = 'en', 
@@ -63,6 +129,7 @@ export async function POST(request: NextRequest) {
     } = await request.json();
 
     console.log('🤖 Creating BP Agent via API route:', {
+      sessionId: sessionId || null,
       name,
       hasSystemPrompt: !!systemPrompt,
       language,
@@ -120,6 +187,10 @@ export async function POST(request: NextRequest) {
     console.log('🔗 Generated embed URL:', embedUrl);
     console.log('🔗 Generated conversation URL:', conversationUrl);
     console.log('🔗 Agent ID for URL generation:', agent.id);
+
+    if (sessionId) {
+      await persistAgentForSession(sessionId, agent.id);
+    }
 
     const responseData = {
       success: true,

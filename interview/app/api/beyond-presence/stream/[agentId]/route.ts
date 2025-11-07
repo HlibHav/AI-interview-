@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { fetchInterviewSession } from "@/lib/weaviate/weaviate-session";
+import { fetchInterviewSession, upsertInterviewSession } from "@/lib/weaviate/weaviate-session";
 
 declare global {
   // eslint-disable-next-line no-var
@@ -12,6 +12,79 @@ if (typeof global.sessionsStore === "undefined") {
   global.sessionsStore = new Map<string, any>();
 }
 sessions = global.sessionsStore;
+
+async function persistBeyondPresenceIdentifiers(
+  sessionId: string,
+  updates: { beyondPresenceAgentId?: string | null; beyondPresenceSessionId?: string | null }
+) {
+  if (!sessionId) {
+    return;
+  }
+
+  let session = sessions.get(sessionId);
+  if (!session) {
+    try {
+      session = await fetchInterviewSession(sessionId);
+      if (session) {
+        sessions.set(sessionId, session);
+      }
+    } catch (error) {
+      console.warn('⚠️ [STREAM] Failed to load session for identifier persistence', {
+        sessionId,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
+
+  if (!session) {
+    console.warn('⚠️ [STREAM] Session not found while persisting identifiers', { sessionId });
+    return;
+  }
+
+  const nextSession = {
+    ...session
+  };
+  let hasChanges = false;
+
+  if (
+    typeof updates.beyondPresenceAgentId === 'string' &&
+    updates.beyondPresenceAgentId.length > 0 &&
+    session.beyondPresenceAgentId !== updates.beyondPresenceAgentId
+  ) {
+    nextSession.beyondPresenceAgentId = updates.beyondPresenceAgentId;
+    hasChanges = true;
+  }
+
+  if (
+    typeof updates.beyondPresenceSessionId === 'string' &&
+    updates.beyondPresenceSessionId.length > 0 &&
+    session.beyondPresenceSessionId !== updates.beyondPresenceSessionId
+  ) {
+    nextSession.beyondPresenceSessionId = updates.beyondPresenceSessionId;
+    hasChanges = true;
+  }
+
+  if (!hasChanges) {
+    return;
+  }
+
+  nextSession.updatedAt = new Date().toISOString();
+  sessions.set(sessionId, nextSession);
+
+  try {
+    await upsertInterviewSession(nextSession);
+    console.log('✅ [STREAM] Persisted BEY identifiers for session', {
+      sessionId,
+      hasAgentId: Boolean(updates.beyondPresenceAgentId),
+      hasSessionId: Boolean(updates.beyondPresenceSessionId)
+    });
+  } catch (error) {
+    console.error('⚠️ [STREAM] Failed to persist BEY identifiers to Weaviate', {
+      sessionId,
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
+}
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ agentId: string }> }
@@ -464,19 +537,23 @@ export async function GET(
             });
             if (sessionId) {
               cachedSession = sessions.get(sessionId) ?? cachedSession;
-              if (cachedSession) {
-                if (
-                  cachedSession.beyondPresenceSessionId !== resolvedCallId ||
-                  cachedSession.beyondPresenceAgentId !== agentId
-                ) {
-                  cachedSession = {
-                    ...cachedSession,
-                    beyondPresenceSessionId: resolvedCallId,
-                    beyondPresenceAgentId: agentId
-                  };
-                  sessions.set(sessionId, cachedSession);
-                }
+              if (
+                cachedSession &&
+                (cachedSession.beyondPresenceSessionId !== resolvedCallId ||
+                  cachedSession.beyondPresenceAgentId !== agentId)
+              ) {
+                cachedSession = {
+                  ...cachedSession,
+                  beyondPresenceSessionId: resolvedCallId,
+                  beyondPresenceAgentId: agentId
+                };
+                sessions.set(sessionId, cachedSession);
               }
+
+              void persistBeyondPresenceIdentifiers(sessionId, {
+                beyondPresenceSessionId: resolvedCallId,
+                beyondPresenceAgentId: agentId
+              });
             }
           }
         }

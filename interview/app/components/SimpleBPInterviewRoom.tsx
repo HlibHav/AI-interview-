@@ -266,6 +266,7 @@ Follow this script but feel free to ask follow-up questions based on the partici
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
+          sessionId,
           name: `Interview Agent - ${sessionId}`,
           systemPrompt: generateSystemPrompt(researchGoal, interviewScript),
           language: 'en',

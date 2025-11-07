@@ -3,17 +3,30 @@
 import { NextRequest } from 'next/server';
 import { subscribePipelineEvents } from '@/lib/events/pipeline-events';
 
-export async function GET(_request: NextRequest) {
+export async function GET(request: NextRequest) {
+  const encoder = new TextEncoder();
+  let cleanup: (() => void) | null = null;
+
   const stream = new ReadableStream({
     start(controller) {
-      const encoder = new TextEncoder();
       const unsubscribe = subscribePipelineEvents(null, (event) => {
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+        try {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+        } catch {
+          cleanup?.();
+        }
       });
       controller.enqueue(encoder.encode(': connected\n\n'));
 
-      const close = () => {
+      const abortHandler = () => cleanup?.();
+
+      cleanup = () => {
+        if (!cleanup) {
+          return;
+        }
+        cleanup = null;
         unsubscribe();
+        request.signal.removeEventListener('abort', abortHandler);
         try {
           controller.close();
         } catch {
@@ -21,7 +34,10 @@ export async function GET(_request: NextRequest) {
         }
       };
 
-      return close;
+      request.signal.addEventListener('abort', abortHandler);
+    },
+    cancel() {
+      cleanup?.();
     }
   });
 
