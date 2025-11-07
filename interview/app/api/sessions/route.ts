@@ -6,6 +6,7 @@ import {
   parseInterviewSession
 } from '@/lib/weaviate/weaviate-session';
 import { getWeaviateClient } from '@/lib/weaviate/weaviate-helpers';
+import { emitPipelineEvent } from '@/lib/events/pipeline-events';
 
 // Global session storage declaration
 declare global {
@@ -154,6 +155,13 @@ export async function POST(request: NextRequest) {
     } catch (weaviateError) {
       console.warn('⚠️ [SESSIONS API] Failed to persist session to Weaviate:', weaviateError);
     }
+
+    emitPipelineEvent({
+      type: 'pipeline:session:updated',
+      sessionId,
+      timestamp: new Date().toISOString(),
+      payload: { status: session.status, researchGoal: session.researchGoal }
+    });
     
     console.log('✅ [SESSIONS API] Session created and stored:', sessionId);
     console.log('✅ [SESSIONS API] Total sessions now:', sessions.size);

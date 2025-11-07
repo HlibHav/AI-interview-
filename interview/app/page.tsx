@@ -37,12 +37,7 @@ const features = [
 
 export default function Home() {
   return (
-    <div className="relative min-h-screen overflow-hidden bg-[#050013] text-zinc-100">
-      <div className="pointer-events-none absolute inset-0 -z-10 opacity-80">
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(76,29,149,0.45),_transparent_55%),radial-gradient(circle_at_bottom,_rgba(14,165,233,0.35),_transparent_60%)]" />
-        <div className="absolute inset-0 backdrop-blur-[100px]" />
-      </div>
-
+    <main className="relative min-h-screen overflow-hidden bg-[#050013] text-zinc-100 before:pointer-events-none before:absolute before:inset-0 before:-z-10 before:opacity-80 before:bg-[radial-gradient(circle_at_top,_rgba(76,29,149,0.45),_transparent_55%),radial-gradient(circle_at_bottom,_rgba(14,165,233,0.35),_transparent_60%)] before:content-[''] after:pointer-events-none after:absolute after:inset-0 after:-z-10 after:backdrop-blur-[100px] after:content-['']">
       <div className="container relative mx-auto flex min-h-screen flex-col px-6 pb-32 pt-24 sm:px-10 lg:px-16">
         <header className="mx-auto max-w-3xl text-center">
           <div className="mb-4 flex items-center justify-center gap-2 text-sm font-medium uppercase tracking-[0.3em] text-zinc-300">
@@ -156,7 +151,6 @@ export default function Home() {
           </section>
         </main>
       </div>
-
-    </div>
+    </main>
   );
 }

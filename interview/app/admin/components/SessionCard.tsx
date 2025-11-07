@@ -15,6 +15,7 @@ import {
   TrendingUp,
   User
 } from 'lucide-react';
+import { PainGainJobsRow } from './PainGainJobsRow';
 
 type SessionCardProps = {
   session: any;
@@ -105,12 +106,25 @@ export function SessionCard({
     const traitEntries = profile?.traits ? Object.entries(profile.traits) : [];
     const hasPsychometricProfile = profile && traitEntries.length > 0;
 
+    const questionCount = Array.isArray(session?.script?.questions)
+      ? session.script.questions.length
+      : Array.isArray(session?.script)
+        ? session.script.length
+        : 0;
+    const turnsFromQuestions = questionCount > 0 ? questionCount * 2 : null;
     const durationMinutes = session?.durationMinutes;
     const plannedDuration = session?.duration || 30;
+    const durationBasedTurns = Math.max(
+      6,
+      Math.ceil(((durationMinutes || plannedDuration || 15) / FALLBACK_PROGRESS_DENOMINATOR))
+    );
+    const expectedTurns = turnsFromQuestions ?? durationBasedTurns;
 
-    const completionPercentage = transcriptCount > 0
-      ? Math.min(100, (transcriptCount / (plannedDuration * FALLBACK_PROGRESS_DENOMINATOR)) * 100)
-      : 0;
+    const completionPercentage = isCompleted
+      ? 100
+      : expectedTurns > 0
+        ? Math.min(100, (transcriptCount / expectedTurns) * 100)
+        : 0;
 
     const headerStats = [
       {
@@ -126,136 +140,126 @@ export function SessionCard({
       {
         icon: Brain,
         label: 'Profile',
-        value: hasPsychometricProfile ? 'Ready' : 'Pending'
-      },
-      {
-        icon: Clock,
-        label: 'Duration',
-        value: durationMinutes ? `${durationMinutes} min` : `${plannedDuration} min planned`
+        value: hasPsychometricProfile ? 'Complete' : 'Pending'
       }
     ];
 
+    const participant = session?.participantEmail || 'Unknown participant';
+    const researchGoal = session?.researchGoal || 'Untitled research goal';
+
+    const startTime = session?.createdAt;
+    const endTime = session?.endTime;
+
+    const traitSummary = traitEntries.map(([key, entry]) => ({
+      trait: key,
+      score: entry?.score ?? entry,
+      descriptor: entry?.descriptor || ''
+    }));
+
     return {
-      StatusIcon,
       statusConfig,
+      StatusIcon,
       isCompleted,
       isInProgress,
-      transcriptCount,
       summaryText,
       keyInsights,
       keyThemes,
       pains,
       gains,
       jobs,
+      profile,
       traitEntries,
+      traitSummary,
       hasPsychometricProfile,
+      durationMinutes,
+      plannedDuration,
       completionPercentage,
-      headerStats
+      headerStats,
+      participant,
+      researchGoal,
+      startTime,
+      endTime,
+      transcriptCount
     };
   }, [session]);
 
-  const sessionId = session?.sessionId || session?.id;
-  const targetAudience = session?.targetAudience || 'Audience n/a';
-  const participantEmail = session?.participantEmail;
-  const sessionUrl = session?.sessionUrl;
+  const sessionId = session?.sessionId || 'unknown';
 
   return (
-    <div
-      data-session-id={sessionId}
-      className={`group relative rounded-2xl border border-zinc-700/40 bg-[#0c0a1a]/70 backdrop-blur transition-all duration-200 ${
-        expanded ? 'shadow-xl shadow-cyan-900/20 border-cyan-400/50' : 'hover:shadow-lg hover:shadow-cyan-900/10 hover:border-cyan-400/40'
-      }`}
-    >
-      <div className="p-6 lg:p-7 space-y-5">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold ${computed.statusConfig.classes}`}>
-              <computed.StatusIcon className="h-3 w-3" />
-              {(session?.status || 'created').replace(/_/g, ' ').toUpperCase()}
-            </span>
-            {computed.hasPsychometricProfile && (
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border border-emerald-400/30 bg-emerald-400/10 text-emerald-200">
-                <CheckCircle2 className="h-3 w-3" />
-                Analyzed
+    <div className="rounded-2xl border border-zinc-700/60 bg-white/5 text-white shadow-lg shadow-black/40">
+      <div className="p-6 lg:p-8 space-y-6">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="space-y-2">
+            <p className="text-xs font-semibold uppercase tracking-[0.4em] text-zinc-500 flex items-center gap-2">
+              <Target className="h-4 w-4 text-cyan-300" />
+              Research Session
+            </p>
+            <h3 className="text-2xl font-semibold leading-tight text-white break-words">
+              {computed.researchGoal}
+            </h3>
+            <div className="flex flex-wrap items-center gap-3 text-sm text-zinc-400">
+              <span className="inline-flex items-center gap-2 rounded-full border border-zinc-700/60 px-3 py-1">
+                <User className="h-3.5 w-3.5 text-zinc-500" />
+                {computed.participant}
               </span>
-            )}
-          </div>
-          <div className="flex items-center gap-2 text-xs text-zinc-500">
-            <Calendar className="h-3.5 w-3.5" />
-            <span>Updated {formatDateTime(session?.updatedAt)}</span>
-          </div>
-        </div>
-
-        <div className="space-y-3">
-          <h3 className="text-xl font-semibold text-white leading-snug">
-            {session?.researchGoal || 'Untitled research goal'}
-          </h3>
-          <div className="flex flex-wrap items-center gap-3 text-sm text-zinc-400">
-            <span className="inline-flex items-center gap-1.5">
-              <Target className="h-3.5 w-3.5" />
-              {targetAudience}
-            </span>
-            {participantEmail && (
-              <span className="inline-flex items-center gap-1.5">
-                <User className="h-3.5 w-3.5" />
-                {participantEmail}
+              <span className="inline-flex items-center gap-2 rounded-full border border-zinc-700/60 px-3 py-1">
+                <Calendar className="h-3.5 w-3.5 text-zinc-500" />
+                {formatDateTime(computed.startTime)}
               </span>
-            )}
-            {sessionId && (
-              <span className="inline-flex items-center gap-1.5 text-xs px-2 py-1 rounded-md bg-zinc-900/60 border border-zinc-700/40 font-mono">
-                ID: {sessionId.slice(0, 10)}
-              </span>
-            )}
-          </div>
-        </div>
-
-        {computed.isInProgress && computed.transcriptCount > 0 && (
-          <div>
-            <div className="flex items-center justify-between text-xs text-zinc-500 mb-2">
-              <span>Progress</span>
-              <span>{Math.round(computed.completionPercentage)}%</span>
             </div>
-            <div className="h-1.5 rounded-full bg-zinc-800/60 overflow-hidden">
+          </div>
+          <div className="flex flex-wrap gap-3 text-sm">
+            <div className={`inline-flex items-center gap-2 rounded-full px-4 py-2 text-xs font-semibold ${computed.statusConfig.classes}`}>
+              <computed.StatusIcon className="h-4 w-4" />
+              {computed.isCompleted ? 'Completed' : computed.isInProgress ? 'In Progress' : 'Scheduled'}
+            </div>
+            {showRespondentLink && session?.sessionUrl && (
+              <a
+                href={session.sessionUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-2 rounded-full border border-cyan-400/60 bg-cyan-500/10 px-4 py-2 text-xs font-semibold text-cyan-100 shadow shadow-cyan-900/30 transition hover:bg-cyan-500/20"
+              >
+                <ExternalLink className="h-4 w-4" />
+                Respondent link
+              </a>
+            )}
+          </div>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {computed.headerStats.map((stat, idx) => {
+            const StatIcon = stat.icon;
+            return (
               <div
-                className="h-full rounded-full bg-gradient-to-r from-cyan-400 to-emerald-400 transition-all duration-500"
+                key={`${sessionId}-stat-${idx}`}
+                className="rounded-xl border border-zinc-700/60 bg-zinc-900/40 p-4"
+              >
+                <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.3em] text-zinc-500 mb-2">
+                  <StatIcon className="h-4 w-4 text-cyan-300" />
+                  {stat.label}
+                </div>
+                <p className="text-lg font-semibold text-white">{stat.value}</p>
+              </div>
+            );
+          })}
+        </div>
+
+        {computed.completionPercentage < 100 && (
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-[0.35em] text-zinc-500">
+              <span>Progress</span>
+              <span className="text-zinc-300">{Math.round(computed.completionPercentage)}%</span>
+            </div>
+            <div className="h-2 rounded-full bg-zinc-800/70 overflow-hidden">
+              <div
+                className="h-full rounded-full bg-gradient-to-r from-cyan-400 via-emerald-400 to-teal-300 shadow-cyan-500/30"
                 style={{ width: `${computed.completionPercentage}%` }}
               />
             </div>
           </div>
         )}
 
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          {computed.headerStats.map((stat, idx) => {
-            const StatIcon = stat.icon;
-            return (
-              <div
-                key={`${sessionId}-stat-${idx}`}
-                className="flex items-center gap-2 rounded-lg border border-zinc-700/40 bg-zinc-900/40 px-3 py-2"
-              >
-                <StatIcon className="h-4 w-4 text-cyan-300" />
-                <div className="text-left">
-                  <div className="text-xs text-zinc-500">{stat.label}</div>
-                  <div className="text-sm font-medium text-zinc-100">{stat.value}</div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-
-        {showRespondentLink && sessionUrl && (
-          <a
-            href={sessionUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex w-fit items-center gap-1.5 text-xs text-cyan-300 hover:text-white transition"
-          >
-            Open respondent link
-            <ExternalLink className="h-3 w-3" />
-          </a>
-        )}
-      </div>
-
-      <div className="border-t border-zinc-700/40 bg-white/2 px-6 lg:px-8 py-4">
         <button
           onClick={onToggle}
           className="w-full flex items-center justify-between text-sm font-medium text-cyan-200 hover:text-white transition-colors group"
@@ -332,7 +336,13 @@ export function SessionCard({
                 </div>
               )}
 
-              <PainGainJobsSection pains={computed.pains} gains={computed.gains} jobs={computed.jobs} sessionId={sessionId} />
+              <PainGainJobsRow
+                pains={computed.pains}
+                gains={computed.gains}
+                jobs={computed.jobs}
+                idPrefix={sessionId}
+                layout="vertical"
+              />
             </div>
 
             <div className="space-y-6">
@@ -389,70 +399,6 @@ export function SessionCard({
           </div>
         </div>
       )}
-    </div>
-  );
-}
-
-type PainGainJobsProps = {
-  pains: string[];
-  gains: string[];
-  jobs: string[];
-  sessionId?: string;
-};
-
-function PainGainJobsSection({ pains, gains, jobs, sessionId }: PainGainJobsProps) {
-  const sections = [
-    {
-      title: 'Pains',
-      items: pains,
-      border: 'border-rose-500/30',
-      bg: 'bg-rose-500/10',
-      text: 'text-rose-50/90',
-      badge: 'bg-rose-500/30 text-rose-100'
-    },
-    {
-      title: 'Gains',
-      items: gains,
-      border: 'border-emerald-500/30',
-      bg: 'bg-emerald-500/10',
-      text: 'text-emerald-50/90',
-      badge: 'bg-emerald-500/30 text-emerald-50'
-    },
-    {
-      title: 'Jobs to be Done',
-      items: jobs,
-      border: 'border-cyan-500/30',
-      bg: 'bg-cyan-500/10',
-      text: 'text-cyan-50/90',
-      badge: 'bg-cyan-500/30 text-cyan-50'
-    }
-  ];
-
-  return (
-    <div className="grid gap-4 sm:grid-cols-1 xl:grid-cols-3">
-      {sections.map((section, idx) => (
-        <div
-          key={`${sessionId || 'session'}-pgj-${idx}`}
-          className={`rounded-xl border ${section.border} ${section.bg} p-5`}
-        >
-          <div className="flex items-center justify-between mb-3">
-            <h4 className="text-sm font-semibold uppercase tracking-[0.2em] text-white/80">{section.title}</h4>
-            <span className={`rounded-full px-2 py-0.5 text-xs ${section.badge}`}>{section.items.length}</span>
-          </div>
-          {section.items.length > 0 ? (
-            <ul className={`space-y-2 text-sm ${section.text}`}>
-              {section.items.map((item, itemIdx) => (
-                <li key={`${sessionId || 'session'}-${section.title}-${itemIdx}`} className="flex items-start gap-2">
-                  <span className="mt-1.5 h-1 w-1 flex-shrink-0 rounded-full bg-white/70" />
-                  <span className="leading-relaxed">{item}</span>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="text-xs text-white/60">No {section.title.toLowerCase()} captured.</p>
-          )}
-        </div>
-      ))}
     </div>
   );
 }

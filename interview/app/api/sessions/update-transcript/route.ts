@@ -7,6 +7,8 @@ import {
   type TranscriptChunkInput
 } from '@/lib/weaviate/weaviate-session';
 import { batchEnrichTranscriptChunks } from '@/lib/analysis/enrich-transcript';
+import { derivePainGainJobsFromSummary } from '@/lib/analysis/pain-gain-jobs';
+import { emitPipelineEvent } from '@/lib/events/pipeline-events';
 
 // Global session storage declaration
 declare global {
@@ -88,14 +90,28 @@ async function updateSessionSummary({
       return;
     }
 
+    const sessionPGJ = derivePainGainJobsFromSummary(summaryRecord ?? {});
+
     updatedSession.summaries = [summaryRecord];
     updatedSession.summary = summaryRecord.summary || '';
     updatedSession.keyFindings = Array.isArray(summaryRecord.insights)
       ? summaryRecord.insights
       : [];
+    updatedSession.pains = sessionPGJ.pains;
+    updatedSession.gains = sessionPGJ.gains;
+    updatedSession.jobs = sessionPGJ.jobs;
     updatedSession.updatedAt = new Date().toISOString();
 
     sessions.set(sessionId, updatedSession);
+    emitPipelineEvent({
+      type: 'pipeline:session:updated',
+      sessionId,
+      timestamp: new Date().toISOString(),
+      payload: {
+        stage: 'summary',
+        researchGoal: updatedSession.researchGoal
+      }
+    });
 
     try {
       const weaviateSessionId = await upsertInterviewSession(updatedSession);
@@ -205,6 +221,12 @@ export async function POST(request: NextRequest) {
     const baseSession =
       latestSnapshot && latestSnapshot !== session ? latestSnapshot : session;
 
+    const normalizedBaseEmail = (baseSession.participantEmail || '').toLowerCase();
+    const emailChanged =
+      typeof normalizedEmail === 'string' &&
+      normalizedEmail.length > 0 &&
+      normalizedEmail !== normalizedBaseEmail;
+
     const updatedSession = {
       ...baseSession,
       transcript: combinedTranscript,
@@ -218,10 +240,7 @@ export async function POST(request: NextRequest) {
       startTime: baseSession.startTime || new Date().toISOString()
     };
 
-    if (
-      normalizedEmail &&
-      normalizedEmail !== (baseSession.participantEmail || '').toLowerCase()
-    ) {
+    if (emailChanged && normalizedEmail) {
       updatedSession.participantEmail = normalizedEmail;
     }
 
@@ -245,6 +264,18 @@ export async function POST(request: NextRequest) {
 
     // Update in memory store and persist to Weaviate
     sessions.set(sessionId, updatedSession);
+    if (emailChanged || timestampedNewEntries.length > 0) {
+      emitPipelineEvent({
+        type: 'pipeline:session:updated',
+        sessionId,
+        timestamp: new Date().toISOString(),
+        payload: {
+          stage: 'transcript',
+          researchGoal: updatedSession.researchGoal,
+          participantEmail: updatedSession.participantEmail
+        }
+      });
+    }
     try {
       const weaviateSessionId = await upsertInterviewSession(updatedSession);
       updatedSession.weaviateId = weaviateSessionId;

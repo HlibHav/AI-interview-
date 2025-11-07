@@ -120,20 +120,24 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const systemPrompt = `You summarise qualitative interview transcripts.
+const systemPrompt = `You summarise qualitative interview transcripts.
 - Produce concise summaries (max ~120 words) that capture the participant's main points.
 - Clearly highlight notable sentiments, motivations, and challenges.
 - Extract 3–5 key themes as short phrases.
+- Identify the participant's top pains (frustrations/challenges), gains (benefits/outcomes they desire or experience), and jobs-to-be-done (what they are trying to accomplish).
 - If the transcript mentions no meaningful content, say so explicitly.`;
 
-    const summaryInstructions = `Please respond with valid JSON in the following shape:
+const summaryInstructions = `Please respond with valid JSON in the following shape:
 {
   "summary": "string",
   "keyThemes": ["theme1", "..."],
   "sentiment": "positive" | "negative" | "neutral",
   "keywords": ["keyword1", "..."],
   "emotionalTone": "string",
-  "insights": ["insight1", "..."]
+  "insights": ["insight1", "..."],
+  "pains": ["pain point", "..."],
+  "gains": ["gain", "..."],
+  "jobs": ["job to be done", "..."]
 }`;
 
     const userPrompt = incrementalMode && existingSummary

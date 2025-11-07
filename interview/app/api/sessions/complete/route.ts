@@ -7,6 +7,8 @@ import {
 } from '@/lib/weaviate/weaviate-session';
 import { runACECycle } from '@/lib/playbook/playbook-orchestrator';
 import { computeAndPersistBatchSummary } from '@/lib/aggregations/batchSummary';
+import { derivePainGainJobsFromSummary } from '@/lib/analysis/pain-gain-jobs';
+import { emitPipelineEvent } from '@/lib/events/pipeline-events';
 
 // Global session storage declaration
 declare global {
@@ -21,8 +23,10 @@ if (typeof global.sessionsStore === 'undefined') {
 sessions = global.sessionsStore;
 
 export async function POST(request: NextRequest) {
+  let requestSessionId: string | null = null;
   try {
     const { sessionId, transcript, researchGoal } = await request.json();
+    requestSessionId = sessionId;
 
     console.log('🏁 [SESSION COMPLETE] Completing session:', sessionId);
     console.log('🏁 [SESSION COMPLETE] Research goal:', researchGoal);
@@ -94,6 +98,11 @@ export async function POST(request: NextRequest) {
         sessionSummary = summarizerPayload?.summary ?? null;
         sessionSummaryMetadata = summarizerPayload;
         console.log('✅ [SESSION COMPLETE] Summary generated successfully');
+        emitPipelineEvent({
+          type: 'pipeline:summary:completed',
+          sessionId,
+          timestamp: new Date().toISOString()
+        });
       } else {
         console.error('❌ [SESSION COMPLETE] Failed to generate summary');
       }
@@ -104,10 +113,15 @@ export async function POST(request: NextRequest) {
     }
 
     // Update session with completion data while preserving original fields
+    const sessionPGJ = derivePainGainJobsFromSummary(sessionSummary ?? {});
+
     const updatedSession = {
       ...preservedSession,
       transcript: transcript,
       summaries: sessionSummary ? [sessionSummary] : [],
+      pains: sessionPGJ.pains,
+      gains: sessionPGJ.gains,
+      jobs: sessionPGJ.jobs,
       psychometricProfile: psychometricProfile,
       status: 'completed',
       endTime: new Date().toISOString(),
@@ -206,6 +220,11 @@ export async function POST(request: NextRequest) {
           psychometricProfile = psychometricPayload?.profile ?? null;
           psychometricMetadata = psychometricPayload;
           console.log('✅ [SESSION COMPLETE] Psychometric profile generated successfully');
+          emitPipelineEvent({
+            type: 'pipeline:psychometrics:completed',
+            sessionId,
+            timestamp: new Date().toISOString()
+          });
           
           // Update the session with the psychometric profile
           updatedSession.psychometricProfile = psychometricProfile;
@@ -233,6 +252,12 @@ export async function POST(request: NextRequest) {
               researchGoalId: goalForBatch,
               interviewCount: batch.interviewIds.length
             });
+            emitPipelineEvent({
+              type: 'pipeline:batch-summary:completed',
+              sessionId,
+              timestamp: new Date().toISOString(),
+              payload: { researchGoalId: goalForBatch }
+            });
           } else {
             console.log('ℹ️ [SESSION COMPLETE] Batch summary skipped (no completed interviews)', {
               researchGoalId: goalForBatch
@@ -251,6 +276,12 @@ export async function POST(request: NextRequest) {
       // Continue - session is still stored in memory
     }
 
+    emitPipelineEvent({
+      type: 'pipeline:finished',
+      sessionId,
+      timestamp: new Date().toISOString()
+    });
+
     return NextResponse.json({
       success: true,
       session: updatedSession,
@@ -261,6 +292,12 @@ export async function POST(request: NextRequest) {
     });
 
   } catch (error) {
+    emitPipelineEvent({
+      type: 'pipeline:failed',
+      sessionId: requestSessionId || 'unknown',
+      timestamp: new Date().toISOString(),
+      payload: { message: error instanceof Error ? error.message : String(error) }
+    });
     console.error('❌ [SESSION COMPLETE] Error:', error);
     return NextResponse.json(
       { success: false, error: 'Failed to complete session' },

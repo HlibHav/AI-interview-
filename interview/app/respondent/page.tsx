@@ -16,6 +16,9 @@ function RespondentInterfaceContent() {
   const [isLoadingSession, setIsLoadingSession] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const persistedEmailRef = useRef<string | null>(null);
+  const [enteredEmail, setEnteredEmail] = useState('');
+  const [submittedEmail, setSubmittedEmail] = useState<string | null>(null);
+  const [emailError, setEmailError] = useState<string | null>(null);
 
   const rawEmailParam =
     searchParams?.get('participantEmail') ||
@@ -54,15 +57,15 @@ function RespondentInterfaceContent() {
 
   const trimmedEmailParam = rawEmailParam ? rawEmailParam.trim() : null;
   const sessionEmail = session?.participantEmail ? String(session.participantEmail) : null;
-  const effectiveEmail = trimmedEmailParam || sessionEmail || null;
+  const effectiveEmail = trimmedEmailParam || sessionEmail || submittedEmail || null;
   const normalizedEffectiveEmail = effectiveEmail ? effectiveEmail.toLowerCase() : null;
 
   // Auto-start: once session is loaded, immediately connect to BEY
   useEffect(() => {
-    if (session && !isConnected) {
+    if (session && normalizedEffectiveEmail && !isConnected) {
       setIsConnected(true);
     }
-  }, [session, isConnected]);
+  }, [session, normalizedEffectiveEmail, isConnected]);
 
   useEffect(() => {
     if (!sessionId || !normalizedEffectiveEmail) {
@@ -78,14 +81,13 @@ function RespondentInterfaceContent() {
 
     const persist = async () => {
       try {
-        const response = await fetch('/api/sessions/update-transcript', {
+        const response = await fetch('/api/sessions/participant', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
             sessionId,
-            transcript: [],
             participantEmail: normalizedEffectiveEmail,
           }),
         });
@@ -104,6 +106,18 @@ function RespondentInterfaceContent() {
 
   const handleDisconnect = () => {
     setIsConnected(false);
+  };
+
+  const handleEmailSubmit = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const trimmed = enteredEmail.trim();
+    if (!trimmed) {
+      setEmailError('Email is required to begin the interview.');
+      return;
+    }
+    const normalized = trimmed.toLowerCase();
+    setSubmittedEmail(normalized);
+    setEmailError(null);
   };
 
   if (isLoadingSession) {
@@ -140,7 +154,7 @@ function RespondentInterfaceContent() {
   // Email is optional - allow interview to proceed without it
   // The email will be captured later if needed
 
-  if (isConnected) {
+  if (isConnected && normalizedEffectiveEmail) {
     return (
       <SimpleBPInterviewRoom
         sessionId={sessionId}
@@ -152,7 +166,49 @@ function RespondentInterfaceContent() {
     );
   }
 
-  // Auto-start mode: show a minimal starting screen before connection
+  if (!normalizedEffectiveEmail) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-green-50 to-blue-100 flex items-center justify-center px-4">
+        <div className="max-w-md w-full bg-white rounded-2xl shadow-xl p-8 space-y-6">
+          <div className="text-center space-y-2">
+            <h1 className="text-2xl font-semibold text-gray-900">Before we begin</h1>
+            <p className="text-sm text-gray-500">
+              Please confirm your email so we can connect you to the right interview.
+            </p>
+          </div>
+          <form className="space-y-4" onSubmit={handleEmailSubmit}>
+            <div>
+              <label htmlFor="participant-email" className="text-sm font-medium text-gray-700">
+                Email
+              </label>
+              <input
+                id="participant-email"
+                type="email"
+                required
+                value={enteredEmail}
+                onChange={(event) => setEnteredEmail(event.target.value)}
+                className="mt-1 w-full rounded-lg border border-gray-300 px-4 py-2 text-gray-900 focus:border-blue-500 focus:ring-blue-500"
+                placeholder="you@example.com"
+              />
+            </div>
+            {emailError && (
+              <p className="text-sm text-red-600">{emailError}</p>
+            )}
+            <button
+              type="submit"
+              className="w-full rounded-lg bg-blue-600 px-4 py-2 text-white font-medium shadow hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              Continue
+            </button>
+          </form>
+          <p className="text-xs text-gray-400 text-center">
+            Your email helps us personalize the conversation and keep your responses secure.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-green-50 to-blue-100 flex items-center justify-center">
       <div className="text-center">

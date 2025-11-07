@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 
 import { SessionCard } from "../components/SessionCard";
+import { PainGainJobsRow } from "../components/PainGainJobsRow";
 import ShinyText from "@/app/components/ui/shiny-text";
 
 type KeyTheme = { theme: string; count: number };
@@ -176,9 +177,21 @@ export default function BatchSummaryPanel({
             durationMinutes: session.durationMinutes,
             duration: session.duration,
             endTime: session.endTime,
-            pains: session.summaries?.[0]?.pains,
-            gains: session.summaries?.[0]?.gains,
-            jobs: session.summaries?.[0]?.jobs,
+            pains: Array.isArray(session?.pains)
+              ? session.pains
+              : Array.isArray(session?.summaries?.[0]?.pains)
+                ? session.summaries[0].pains
+                : [],
+            gains: Array.isArray(session?.gains)
+              ? session.gains
+              : Array.isArray(session?.summaries?.[0]?.gains)
+                ? session.summaries[0].gains
+                : [],
+            jobs: Array.isArray(session?.jobs)
+              ? session.jobs
+              : Array.isArray(session?.summaries?.[0]?.jobs)
+                ? session.summaries[0].jobs
+                : [],
           });
         } else {
           newMap.set(sessionId, {
@@ -253,6 +266,73 @@ export default function BatchSummaryPanel({
 
   useEffect(() => {
     void loadBatches();
+  }, [loadBatches]);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      void loadBatches();
+    }, 15000);
+    return () => clearInterval(interval);
+  }, [loadBatches]);
+
+  useEffect(() => {
+    if (!expandedGoal) {
+      return;
+    }
+    const current = summaries.find((summary) => summary.researchGoalId === expandedGoal);
+    if (current && current.interviewIds.length > 0) {
+      void loadSessionsForBatch(current.interviewIds);
+    }
+  }, [expandedGoal, summaries, loadSessionsForBatch]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    const source = new EventSource('/api/pipeline/events');
+    source.onmessage = (event) => {
+      try {
+        const payload = JSON.parse(event.data);
+        const eventType = payload?.type;
+        if (eventType === 'pipeline:session:updated') {
+          const participantEmail = payload?.payload?.participantEmail;
+          if (participantEmail) {
+            setSessionMap((prev) => {
+              if (!prev.has(payload.sessionId)) {
+                return prev;
+              }
+              const updated = new Map(prev);
+              const current = updated.get(payload.sessionId);
+              if (current) {
+                updated.set(payload.sessionId, {
+                  ...current,
+                  participantEmail
+                });
+              }
+              return updated;
+            });
+          }
+          void loadBatches();
+        } else if (
+          eventType === 'pipeline:finished' ||
+          eventType === 'pipeline:batch-summary:completed' ||
+          eventType === 'pipeline:summary:completed'
+        ) {
+          void loadBatches();
+        }
+      } catch {
+        // ignore malformed payloads
+      }
+    };
+    source.onerror = () => {
+      source.close();
+      setTimeout(() => {
+        void loadBatches();
+      }, 2000);
+    };
+    return () => {
+      source.close();
+    };
   }, [loadBatches]);
 
   useEffect(() => {
@@ -369,23 +449,8 @@ export default function BatchSummaryPanel({
     [summaries],
   );
 
-  const mainHeader = (
-    <header className="space-y-4">
-      <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.35em] text-zinc-500">
-        <Sparkles className="h-4 w-4 text-cyan-300" />
-        <ShinyText text="Interview Intelligence" speed={4} className="text-sm" />
-      </div>
-      <h1 className="text-3xl font-semibold text-white sm:text-4xl">Batch Summaries</h1>
-      <p className="max-w-2xl text-sm text-zinc-400">
-        Aggregate insights across every interview goal. Regenerate summaries in bulk or refresh a single goal to keep reports aligned with the latest conversations.
-      </p>
-    </header>
-  );
-
   return (
-    <div className={embedded ? "space-y-10" : "space-y-10"}>
-      {mainHeader}
-
+    <div className={embedded ? "" : ""}>
       {(error || loading || bulkStatus) && (
         <section className="rounded-2xl border border-zinc-700/40 bg-white/8 p-6 lg:p-8">
           {error && (
@@ -421,31 +486,6 @@ export default function BatchSummaryPanel({
       )}
 
       <section className="space-y-6">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h2 className="text-2xl font-semibold text-white">Available Batch Summaries</h2>
-            <p className="mt-1 text-sm text-zinc-400">
-              View and manage aggregated insights across interview sessions
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-3">
-            <span className="rounded-full border border-zinc-700/60 bg-white/5 px-4 py-2 text-sm font-medium text-zinc-200">
-              {filteredSummaries.length} {filteredSummaries.length === 1 ? "batch" : "batches"}
-            </span>
-            <span className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-4 py-2 text-sm font-medium text-emerald-200">
-              {filteredSummaries.filter((s) => s.hasSummary).length} with summaries
-            </span>
-            <button
-              onClick={() => void rebuildAllSummaries()}
-              disabled={bulkLoading}
-              className="inline-flex items-center gap-2 rounded-full bg-gradient-to-r from-cyan-400 via-emerald-400 to-teal-300 px-4 py-2 text-sm font-semibold text-[#050013] shadow-lg shadow-cyan-900/40 transition-all duration-200 hover:-translate-y-[1px] hover:shadow-xl focus:outline-none focus:ring-2 focus:ring-cyan-400/60 disabled:from-zinc-600 disabled:via-zinc-500 disabled:to-zinc-600 disabled:text-zinc-200 disabled:opacity-80 disabled:cursor-not-allowed"
-            >
-              <RefreshCcw className={`h-4 w-4 ${bulkLoading ? "animate-spin" : ""}`} />
-              {bulkLoading ? "Generating…" : "Generate all summaries"}
-            </button>
-          </div>
-        </div>
-
         {filteredSummaries.length === 0 ? (
           <div className="rounded-2xl border border-zinc-700/40 bg-white/8 p-12 text-center">
             <Layers className="mx-auto mb-4 h-12 w-12 text-zinc-500" />
@@ -502,26 +542,6 @@ export default function BatchSummaryPanel({
                             </span>
                           )}
                         </div>
-                        {summary.keyThemes.slice(0, 3).length > 0 && (
-                          <div className="flex flex-wrap gap-2 pt-2">
-                            {summary.keyThemes.slice(0, 3).map((t, idx) => (
-                              <span
-                                key={`${t.theme}-${idx}`}
-                                className="inline-flex items-center rounded-full border border-cyan-400/40 bg-cyan-500/10 px-3 py-1.5 text-xs font-medium text-cyan-200"
-                              >
-                                {t.theme}
-                                <span className="ml-1.5 rounded-full bg-white/10 px-1.5 py-0.5 text-[10px]">
-                                  {t.count}
-                                </span>
-                              </span>
-                            ))}
-                            {summary.keyThemes.length > 3 && (
-                              <span className="inline-flex items-center rounded-full border border-zinc-700/50 bg-zinc-900/40 px-3 py-1.5 text-xs text-zinc-400">
-                                +{summary.keyThemes.length - 3} more
-                              </span>
-                            )}
-                          </div>
-                        )}
                       </div>
                       <div className="flex flex-col items-start lg:items-end gap-3">
                         <div className="flex flex-wrap gap-2 w-full lg:justify-end">
@@ -587,27 +607,32 @@ export default function BatchSummaryPanel({
                                   <TrendingUp className="h-4 w-4 text-cyan-300" />
                                   Key Themes
                                 </h4>
-                                <div className="flex flex-wrap gap-2">
-                                  {summary.keyThemes.length > 0 ? (
-                                    summary.keyThemes.map((t, idx) => (
-                                      <span
-                                        key={`${t.theme}-${idx}`}
-                                        className="inline-flex items-center rounded-full border border-cyan-400/40 bg-cyan-500/10 px-3 py-1.5 text-xs font-medium text-cyan-200"
-                                        title={`${t.count} ${t.count === 1 ? "mention" : "mentions"}`}
-                                      >
-                                        {t.theme}
-                                        <span className="ml-1.5 rounded-full bg-white/10 px-1.5 py-0.5 text-[10px]">
+                                {summary.keyThemes.length > 0 ? (
+                                  <ul className="space-y-2">
+                                    {summary.keyThemes.map((t, idx) => (
+                                      <li key={`${t.theme}-${idx}`} className="flex items-center justify-between text-sm text-zinc-100">
+                                        <span className="truncate">{t.theme}</span>
+                                        <span className="ml-4 flex-shrink-0 rounded-full bg-cyan-500/10 px-2 py-0.5 text-[11px] text-cyan-200">
                                           {t.count}
                                         </span>
-                                      </span>
-                                    ))
-                                  ) : (
-                                    <span className="text-xs text-zinc-500 italic">No themes identified yet.</span>
-                                  )}
-                                </div>
+                                      </li>
+                                    ))}
+                                  </ul>
+                                ) : (
+                                  <span className="text-xs text-zinc-500 italic">No themes identified yet.</span>
+                                )}
                               </div>
                             </div>
                           </div>
+                        )}
+
+                        {(summary.pains.length > 0 || summary.gains.length > 0 || summary.jobs.length > 0) && (
+                          <PainGainJobsRow
+                            pains={summary.pains}
+                            gains={summary.gains}
+                            jobs={summary.jobs}
+                            idPrefix={`${summary.researchGoalId || 'batch'}-aggregate`}
+                          />
                         )}
 
                         {sessions.length > 0 && (
@@ -650,5 +675,3 @@ export default function BatchSummaryPanel({
     </div>
   );
 }
-
-

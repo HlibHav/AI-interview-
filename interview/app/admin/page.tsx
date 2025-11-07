@@ -549,12 +549,7 @@ function AdminDashboardContent() {
   ];
 
   return (
-    <div className="relative min-h-screen overflow-hidden bg-[#050013] text-zinc-100">
-      <div className="pointer-events-none absolute inset-0 -z-10 opacity-80">
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(76,29,149,0.45),_transparent_55%),radial-gradient(circle_at_bottom,_rgba(14,165,233,0.35),_transparent_60%)]" />
-        <div className="absolute inset-0 backdrop-blur-[120px]" />
-      </div>
-
+    <main className="relative min-h-screen overflow-hidden bg-[#050013] text-zinc-100 before:pointer-events-none before:absolute before:inset-0 before:-z-10 before:opacity-80 before:bg-[radial-gradient(circle_at_top,_rgba(76,29,149,0.45),_transparent_55%),radial-gradient(circle_at_bottom,_rgba(14,165,233,0.35),_transparent_60%)] before:content-[''] after:pointer-events-none after:absolute after:inset-0 after:-z-10 after:backdrop-blur-[120px] after:content-['']">
       <header className="border-b border-zinc-800/60 bg-white/5 backdrop-blur">
         <div className="max-w-[1400px] mx-auto flex flex-col gap-4 px-6 py-8 sm:flex-row sm:items-center sm:justify-between lg:px-10">
           <div>
@@ -1077,7 +1072,7 @@ function AdminDashboardContent() {
           </div>
         </div>
       </div>
-    </div>
+    </main>
   );
 }
 

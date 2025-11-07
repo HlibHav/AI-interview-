@@ -25,6 +25,9 @@ type PerInterviewSummary = {
   summary?: string;
   keyThemes?: ThemeInput[];
   insights?: string[];
+  pains?: string[];
+  gains?: string[];
+  jobs?: string[];
   updatedAt?: string;
   createdAt?: string;
 };
@@ -114,6 +117,21 @@ function coerceTextValue(value: any): string {
     }
   }
   return '';
+}
+
+function dedupeStrings(values: string[], limit = 50): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    const trimmed = value.trim();
+    if (!trimmed) continue;
+    const lower = trimmed.toLowerCase();
+    if (seen.has(lower)) continue;
+    seen.add(lower);
+    result.push(trimmed);
+    if (result.length >= limit) break;
+  }
+  return result;
 }
 
 function countThemes(items: Array<ThemeInput | null | undefined>): KeyTheme[] {
@@ -513,10 +531,30 @@ async function fetchInterviewSummariesByResearchGoal(
             }
           }
 
-          const insights: string[] = Array.isArray(rec?.summaries?.[0]?.insights)
-            ? (rec.summaries![0]!.insights as string[])
+          const summaryRecord = Array.isArray(rec?.summaries) && rec.summaries.length > 0 ? rec.summaries[0] : null;
+
+          const insights: string[] = Array.isArray(summaryRecord?.insights)
+            ? (summaryRecord!.insights as string[])
             : Array.isArray(rec?.insights)
               ? (rec.insights as string[])
+              : [];
+
+          const pains: string[] = Array.isArray(rec?.pains) && rec.pains.length > 0
+            ? rec.pains
+            : Array.isArray(summaryRecord?.pains)
+              ? summaryRecord!.pains as string[]
+              : [];
+
+          const gains: string[] = Array.isArray(rec?.gains) && rec.gains.length > 0
+            ? rec.gains
+            : Array.isArray(summaryRecord?.gains)
+              ? summaryRecord!.gains as string[]
+              : [];
+
+          const jobs: string[] = Array.isArray(rec?.jobs) && rec.jobs.length > 0
+            ? rec.jobs
+            : Array.isArray(summaryRecord?.jobs)
+              ? summaryRecord!.jobs as string[]
               : [];
 
           summaries.push({
@@ -525,6 +563,9 @@ async function fetchInterviewSummariesByResearchGoal(
             summary: rec?.summary || rec?.summaries?.[0]?.summary || '',
             keyThemes,
             insights,
+            pains,
+            gains,
+            jobs,
             updatedAt: recordUpdatedAt,
             createdAt: recordCreatedAt,
           });
@@ -548,6 +589,9 @@ async function fetchInterviewSummariesByResearchGoal(
               summary
               keyFindings
               insights
+              pains
+              gains
+              jobs
               researchGoal
               status
               createdAt
@@ -592,6 +636,9 @@ async function fetchInterviewSummariesByResearchGoal(
             summary
             keyFindings
             insights
+            pains
+            gains
+            jobs
             researchGoal
             status
             createdAt
@@ -757,12 +804,15 @@ export async function computeAndPersistBatchSummary(
       .flatMap((p) => p.insights || [])
       .map((insight) => coerceTextValue(insight))
       .filter((text) => text.length > 0);
+    const perSessionPains = dedupeStrings(perInterview.flatMap((p) => p.pains || []));
+    const perSessionGains = dedupeStrings(perInterview.flatMap((p) => p.gains || []));
+    const perSessionJobs = dedupeStrings(perInterview.flatMap((p) => p.jobs || []));
 
     let summary = '';
     let overallProfile = '';
-    let pains: string[] = [];
-    let gains: string[] = [];
-    let jobs: string[] = [];
+    let pains: string[] = perSessionPains.slice(0, 10);
+    let gains: string[] = perSessionGains.slice(0, 10);
+    let jobs: string[] = perSessionJobs.slice(0, 10);
     let personalityProfile: PersonalityProfile | undefined;
 
     const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
