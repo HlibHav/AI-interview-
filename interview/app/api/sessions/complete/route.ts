@@ -70,13 +70,18 @@ export async function POST(request: NextRequest) {
       sessionUrl: session.sessionUrl,
       roomName: session.roomName,
       tags: session.tags,
-      isPublic: session.isPublic
+      isPublic: session.isPublic,
+      participantEmail: session.participantEmail,
+      participantName: session.participantName,
+      beyondPresenceAgentId: session.beyondPresenceAgentId,
+      beyondPresenceSessionId: session.beyondPresenceSessionId,
+      psychometricProfile: session.psychometricProfile
     };
 
     // Generate summary using OpenAI
     let sessionSummary: any = null;
     let sessionSummaryMetadata: any = null;
-    let psychometricProfile: any = null;
+    let psychometricProfile: any = session.psychometricProfile ?? null;
     let psychometricMetadata: any = null;
 
     try {
@@ -199,46 +204,54 @@ export async function POST(request: NextRequest) {
       }
 
       // Now call psychometric agent with the weaviateSessionId
-      try {
-        console.log('🧠 [SESSION COMPLETE] Calling psychometric agent with weaviateSessionId:', weaviateSessionId);
-        const psychometricResponse = await fetch(`${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'}/api/agents/psychometric`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            fullTranscript: transcript,
-            researchGoal: session.researchGoal, // Use original research goal
-            summaries: sessionSummary ? [sessionSummary] : [],
-            sessionUuid: sessionId,
-            weaviateSessionId: weaviateSessionId
-          }),
-        });
+      const shouldGeneratePsychometrics = !psychometricProfile;
 
-        if (psychometricResponse.ok) {
-          const psychometricPayload = await psychometricResponse.json();
-          psychometricProfile = psychometricPayload?.profile ?? null;
-          psychometricMetadata = psychometricPayload;
-          console.log('✅ [SESSION COMPLETE] Psychometric profile generated successfully');
-          emitPipelineEvent({
-            type: 'pipeline:psychometrics:completed',
-            sessionId,
-            timestamp: new Date().toISOString()
+      if (shouldGeneratePsychometrics) {
+        try {
+          console.log('🧠 [SESSION COMPLETE] Calling psychometric agent with weaviateSessionId:', weaviateSessionId);
+          const psychometricResponse = await fetch(`${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'}/api/agents/psychometric`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              fullTranscript: transcript,
+              researchGoal: session.researchGoal, // Use original research goal
+              summaries: sessionSummary ? [sessionSummary] : [],
+              sessionUuid: sessionId,
+              weaviateSessionId: weaviateSessionId
+            }),
           });
-          
-          // Update the session with the psychometric profile
-          updatedSession.psychometricProfile = psychometricProfile;
-          sessions.set(sessionId, updatedSession);
-          
-          // Update in Weaviate as well
-          await upsertInterviewSession(updatedSession);
-          console.log('✅ [SESSION COMPLETE] Updated InterviewSession with psychometric profile');
-        } else {
-          console.error('❌ [SESSION COMPLETE] Failed to generate psychometric profile');
+
+          if (psychometricResponse.ok) {
+            const psychometricPayload = await psychometricResponse.json();
+            psychometricProfile = psychometricPayload?.profile ?? null;
+            psychometricMetadata = psychometricPayload;
+            console.log('✅ [SESSION COMPLETE] Psychometric profile generated successfully');
+            emitPipelineEvent({
+              type: 'pipeline:psychometrics:completed',
+              sessionId,
+              timestamp: new Date().toISOString()
+            });
+            
+            // Update the session with the psychometric profile
+            updatedSession.psychometricProfile = psychometricProfile;
+            sessions.set(sessionId, updatedSession);
+            
+            // Update in Weaviate as well
+            await upsertInterviewSession(updatedSession);
+            console.log('✅ [SESSION COMPLETE] Updated InterviewSession with psychometric profile');
+          } else {
+            console.error('❌ [SESSION COMPLETE] Failed to generate psychometric profile');
+          }
+        } catch (psychometricError) {
+          console.error('❌ [SESSION COMPLETE] Error calling psychometric agent:', psychometricError);
+          // Continue - session is still stored without psychometric profile
         }
-      } catch (psychometricError) {
-        console.error('❌ [SESSION COMPLETE] Error calling psychometric agent:', psychometricError);
-        // Continue - session is still stored without psychometric profile
+      } else {
+        console.log('ℹ️ [SESSION COMPLETE] Psychometric profile already exists, skipping regeneration', {
+          sessionId
+        });
       }
 
       console.log('✅ [SESSION COMPLETE] Session stored in Weaviate successfully');

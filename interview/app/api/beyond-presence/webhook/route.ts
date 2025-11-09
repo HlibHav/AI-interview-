@@ -34,22 +34,108 @@ function extractMessages(payload: AnyRecord): AnyRecord[] {
   }
 
   const candidates: AnyRecord[] = [];
+  const candidateKeys = new Set<string>();
+  const visited = new Set<any>();
+  const queue: any[] = [payload];
 
-  if (Array.isArray(payload.messages)) {
-    candidates.push(...payload.messages);
-  }
+  const looksLikeMessage = (value: any): value is AnyRecord => {
+    if (!value || typeof value !== 'object') {
+      return false;
+    }
+    return ['text', 'message', 'content', 'transcript', 'transcription'].some((key) => {
+      const field = (value as AnyRecord)[key];
+      return typeof field === 'string' && field.trim().length > 0;
+    });
+  };
 
-  if (payload.message && typeof payload.message === 'object') {
-    candidates.push(payload.message);
-  }
+  const makeKey = (msg: AnyRecord) => {
+    const id =
+      msg.id ||
+      msg.messageId ||
+      msg.message_id ||
+      msg.sequence ||
+      msg.seq ||
+      msg.turnId ||
+      msg.turn_id ||
+      '';
+    const timestamp =
+      msg.timestamp ||
+      msg.sent_at ||
+      msg.created_at ||
+      msg.createdAt ||
+      msg.time ||
+      '';
+    const text =
+      (typeof msg.text === 'string' && msg.text.trim()) ||
+      (typeof msg.message === 'string' && msg.message.trim()) ||
+      (typeof msg.content === 'string' && msg.content.trim()) ||
+      '';
+    return `${id}|${timestamp}|${text}`.toLowerCase();
+  };
 
-  if (payload.data) {
-    if (Array.isArray(payload.data.messages)) {
-      candidates.push(...payload.data.messages);
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (!current || visited.has(current)) {
+      continue;
+    }
+    visited.add(current);
+
+    if (Array.isArray(current)) {
+      for (const entry of current) {
+        if (!entry) {
+          continue;
+        }
+        if (looksLikeMessage(entry)) {
+          const key = makeKey(entry);
+          if (!candidateKeys.has(key)) {
+            candidateKeys.add(key);
+            candidates.push(entry);
+          }
+          continue;
+        }
+        if (typeof entry === 'object') {
+          queue.push(entry);
+        }
+      }
+      continue;
     }
 
-    if (payload.data.message && typeof payload.data.message === 'object') {
-      candidates.push(payload.data.message);
+    if (looksLikeMessage(current)) {
+      const key = makeKey(current);
+      if (!candidateKeys.has(key)) {
+        candidateKeys.add(key);
+        candidates.push(current);
+      }
+    }
+
+    if (typeof current === 'object') {
+      for (const [key, value] of Object.entries(current as AnyRecord)) {
+        if (!value) {
+          continue;
+        }
+
+        if (Array.isArray(value)) {
+          queue.push(value);
+          continue;
+        }
+
+        if (typeof value === 'object') {
+          const normalizedKey = key.toLowerCase();
+          if (
+            normalizedKey.includes('message') ||
+            normalizedKey.includes('transcript') ||
+            normalizedKey.includes('chunk') ||
+            normalizedKey.includes('segment') ||
+            normalizedKey.includes('delta') ||
+            normalizedKey.includes('utterance') ||
+            normalizedKey.includes('payload') ||
+            normalizedKey.includes('data') ||
+            normalizedKey.includes('call')
+          ) {
+            queue.push(value);
+          }
+        }
+      }
     }
   }
 
@@ -338,75 +424,6 @@ export async function POST(request: NextRequest) {
 
   const messages = toTranscriptEntries(extractMessages(payload));
 
-  // Якщо немає повідомлень і немає sessionId, це може бути просто подія (наприклад, call_ended)
-  if (messages.length === 0 && !resolvedSessionId) {
-    console.log('ℹ️ [BEY WEBHOOK] Event without messages and sessionId, accepting webhook', {
-      beySessionId,
-      beyAgentId,
-      payloadKeys: Object.keys(payload || {})
-    });
-    return NextResponse.json(
-      {
-        success: true,
-        message: 'Webhook event received',
-        event: payload?.event || payload?.type || 'unknown',
-        beySessionId,
-        beyAgentId
-      },
-      {
-        headers: {
-          'Access-Control-Allow-Origin': '*',
-        }
-      }
-    );
-  }
-
-  const baseUrl =
-    process.env.NEXT_PUBLIC_BASE_URL ||
-    `${request.nextUrl.protocol}//${request.nextUrl.host}`;
-
-  if (messages.length > 0 && resolvedSessionId) {
-    console.log('📤 [BEY WEBHOOK] Forwarding transcript payload', {
-      sessionId: resolvedSessionId,
-      beySessionId,
-      messages: messages.length
-    });
-
-    void fetch(`${baseUrl}/api/sessions/update-transcript`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        sessionId: resolvedSessionId,
-        beySessionId,
-        transcript: messages,
-        beyondPresenceAgentId: beyAgentId
-      })
-    })
-      .then(async (response) => {
-        if (!response.ok) {
-          const errorText = await response.text();
-          console.error('❌ [BEY WEBHOOK] Failed to forward transcript payload', {
-            sessionId: resolvedSessionId,
-            beySessionId,
-            status: response.status,
-            statusText: response.statusText,
-            errorText
-          });
-        } else {
-          console.log('✅ [BEY WEBHOOK] Transcript payload accepted', {
-            sessionId: resolvedSessionId,
-            beySessionId,
-            messages: messages.length
-          });
-        }
-      })
-      .catch((error) => {
-        console.error('❌ [BEY WEBHOOK] Error forwarding transcript payload', error);
-      });
-  }
-
   const endedStatusTokens = ['ended', 'completed', 'finished', 'stopped', 'closed', 'terminated', 'disconnected', 'success'];
   const endedEvents = [
     'call.completed',
@@ -453,6 +470,92 @@ export async function POST(request: NextRequest) {
     stateMatches ||
     messageMatches ||
     Boolean(payload?.call?.endedAt || payload?.call?.ended_at);
+
+  const transcriptEventTokens = ['transcript', 'transcription', 'chunk', 'delta', 'utterance'];
+  const eventLooksTranscriptual = Boolean(
+    normalizedEvent &&
+      transcriptEventTokens.some((token) => normalizedEvent.includes(token))
+  );
+
+  // Якщо немає повідомлень і немає sessionId, це може бути просто подія (наприклад, call_ended)
+  if (messages.length === 0 && !resolvedSessionId) {
+    console.log('ℹ️ [BEY WEBHOOK] Event without messages and sessionId, accepting webhook', {
+      beySessionId,
+      beyAgentId,
+      payloadKeys: Object.keys(payload || {})
+    });
+    return NextResponse.json(
+      {
+        success: true,
+        message: 'Webhook event received',
+        event: payload?.event || payload?.type || 'unknown',
+        beySessionId,
+        beyAgentId
+      },
+      {
+        headers: {
+          'Access-Control-Allow-Origin': '*',
+        }
+      }
+    );
+  }
+
+  const baseUrl =
+    process.env.NEXT_PUBLIC_BASE_URL ||
+    `${request.nextUrl.protocol}//${request.nextUrl.host}`;
+
+  const shouldSkipTranscriptForwarding =
+    messages.length > 0 && resolvedSessionId && callEnded && !eventLooksTranscriptual;
+
+  if (messages.length > 0 && resolvedSessionId && !shouldSkipTranscriptForwarding) {
+    console.log('📤 [BEY WEBHOOK] Forwarding transcript payload', {
+      sessionId: resolvedSessionId,
+      beySessionId,
+      messages: messages.length,
+      eventLooksTranscriptual
+    });
+
+    void fetch(`${baseUrl}/api/sessions/update-transcript`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        sessionId: resolvedSessionId,
+        beyondPresenceSessionId: beySessionId || undefined,
+        transcript: messages,
+        beyondPresenceAgentId: beyAgentId
+      })
+    })
+      .then(async (response) => {
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error('❌ [BEY WEBHOOK] Failed to forward transcript payload', {
+            sessionId: resolvedSessionId,
+            beySessionId,
+            status: response.status,
+            statusText: response.statusText,
+            errorText
+          });
+        } else {
+          console.log('✅ [BEY WEBHOOK] Transcript payload accepted', {
+            sessionId: resolvedSessionId,
+            beySessionId,
+            messages: messages.length
+          });
+        }
+      })
+      .catch((error) => {
+        console.error('❌ [BEY WEBHOOK] Error forwarding transcript payload', error);
+      });
+  } else if (shouldSkipTranscriptForwarding) {
+    console.log('ℹ️ [BEY WEBHOOK] Skipping full transcript replay from call-end event', {
+      sessionId: resolvedSessionId,
+      beySessionId,
+      normalizedEvent,
+      messageCount: messages.length
+    });
+  }
 
   if (callEnded && resolvedSessionId) {
     if (completedSessions.has(resolvedSessionId)) {

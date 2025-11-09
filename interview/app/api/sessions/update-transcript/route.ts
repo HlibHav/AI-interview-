@@ -12,15 +12,32 @@ import { emitPipelineEvent } from '@/lib/events/pipeline-events';
 
 // Global session storage declaration
 declare global {
+  // eslint-disable-next-line no-var
   var sessionsStore: Map<string, any> | undefined;
+  // eslint-disable-next-line no-var
+  var psychometricUpdateState:
+    | Map<string, { lastRun: number; running: boolean }>
+    | undefined;
 }
 
 let sessions: Map<string, any>;
+let psychometricUpdateState: Map<string, { lastRun: number; running: boolean }>;
 
 if (typeof global.sessionsStore === 'undefined') {
   global.sessionsStore = new Map<string, any>();
 }
 sessions = global.sessionsStore;
+
+if (typeof global.psychometricUpdateState === 'undefined') {
+  global.psychometricUpdateState = new Map();
+}
+psychometricUpdateState = global.psychometricUpdateState;
+
+const REALTIME_PSYCH_ENABLED =
+  (process.env.REALTIME_PSYCHOMETRICS ?? 'true').toLowerCase() !== 'false';
+const REALTIME_PSYCH_INTERVAL_MS = Number(
+  process.env.REALTIME_PSYCH_INTERVAL_MS || 60000
+);
 
 function asTranscriptEntries(payload: any): any[] {
   if (!payload) {
@@ -32,6 +49,214 @@ function asTranscriptEntries(payload: any): any[] {
   }
 
   return [payload];
+}
+
+function makeEntryHash(entry: any): string | null {
+  if (!entry || typeof entry !== 'object') {
+    return null;
+  }
+
+  const speaker =
+    typeof entry.speaker === 'string'
+      ? entry.speaker.trim().toLowerCase()
+      : typeof entry.role === 'string'
+        ? entry.role.trim().toLowerCase()
+        : 'unknown';
+
+  const text =
+    typeof entry.text === 'string'
+      ? entry.text.trim()
+      : typeof entry.content === 'string'
+        ? entry.content.trim()
+        : typeof entry.message === 'string'
+          ? entry.message.trim()
+          : '';
+
+  const timestamp =
+    typeof entry.timestamp === 'string'
+      ? entry.timestamp
+      : typeof entry.sent_at === 'string'
+        ? entry.sent_at
+        : typeof entry.time === 'string'
+          ? entry.time
+          : typeof entry.createdAt === 'string'
+            ? entry.createdAt
+            : typeof entry.created_at === 'string'
+              ? entry.created_at
+              : '';
+
+  if (!text) {
+    return null;
+  }
+
+  return `${speaker}|${timestamp}|${text}`.toLowerCase();
+}
+
+function hasParticipantSignal(entries: any[]): boolean {
+  if (!Array.isArray(entries) || entries.length === 0) {
+    return false;
+  }
+
+  return entries.some((entry) => {
+    if (!entry || typeof entry !== 'object') {
+      return false;
+    }
+
+    const speaker =
+      typeof entry.speaker === 'string' ? entry.speaker.toLowerCase() : '';
+    if (!['participant', 'user', 'respondent'].includes(speaker)) {
+      return false;
+    }
+
+    const text =
+      typeof entry.text === 'string'
+        ? entry.text.trim()
+        : typeof entry.content === 'string'
+          ? entry.content.trim()
+          : '';
+    if (!text) {
+      return false;
+    }
+
+    return text.split(/\s+/).filter(Boolean).length >= 3;
+  });
+}
+
+function scheduleRealtimePsychometrics({
+  sessionId,
+  updatedSession,
+  fullTranscript,
+  weaviateSessionId,
+  newEntries
+}: {
+  sessionId: string;
+  updatedSession: any;
+  fullTranscript: any[];
+  weaviateSessionId?: string | null;
+  newEntries: any[];
+}) {
+  if (
+    !REALTIME_PSYCH_ENABLED ||
+    !Array.isArray(fullTranscript) ||
+    fullTranscript.length === 0 ||
+    !hasParticipantSignal(newEntries)
+  ) {
+    return;
+  }
+
+  const state =
+    psychometricUpdateState.get(sessionId) ?? {
+      lastRun: 0,
+      running: false
+    };
+  const now = Date.now();
+
+  if (state.running) {
+    return;
+  }
+
+  if (now - state.lastRun < REALTIME_PSYCH_INTERVAL_MS) {
+    return;
+  }
+
+  state.running = true;
+  psychometricUpdateState.set(sessionId, state);
+
+  void runRealtimePsychometrics({
+    sessionId,
+    updatedSession,
+    fullTranscript,
+    weaviateSessionId
+  }).finally(() => {
+    state.running = false;
+    state.lastRun = Date.now();
+    psychometricUpdateState.set(sessionId, state);
+  });
+}
+
+async function runRealtimePsychometrics({
+  sessionId,
+  updatedSession,
+  fullTranscript,
+  weaviateSessionId
+}: {
+  sessionId: string;
+  updatedSession: any;
+  fullTranscript: any[];
+  weaviateSessionId?: string | null;
+}) {
+  const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000';
+
+  try {
+    const response = await fetch(`${baseUrl}/api/agents/psychometric`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        fullTranscript,
+        researchGoal: updatedSession.researchGoal,
+        summaries: updatedSession.summaries || [],
+        sessionUuid: sessionId,
+        weaviateSessionId:
+          weaviateSessionId ||
+          updatedSession.weaviateId ||
+          updatedSession.weaviateSessionId ||
+          null
+      })
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('⚠️ [UPDATE TRANSCRIPT] Real-time psychometric request failed', {
+        sessionId,
+        status: response.status,
+        statusText: response.statusText,
+        errorText
+      });
+      return;
+    }
+
+    const payload = await response.json();
+    const profile = payload?.profile;
+
+    if (!profile) {
+      console.warn('⚠️ [UPDATE TRANSCRIPT] Psychometric agent returned no profile', {
+        sessionId
+      });
+      return;
+    }
+
+    updatedSession.psychometricProfile = profile;
+    updatedSession.updatedAt = new Date().toISOString();
+    sessions.set(sessionId, updatedSession);
+
+    emitPipelineEvent({
+      type: 'pipeline:session:updated',
+      sessionId,
+      timestamp: new Date().toISOString(),
+      payload: {
+        stage: 'psychometrics'
+      }
+    });
+
+    try {
+      await upsertInterviewSession(updatedSession);
+      console.log('✅ [UPDATE TRANSCRIPT] Realtime psychometric profile persisted', {
+        sessionId
+      });
+    } catch (persistError) {
+      console.error(
+        '⚠️ [UPDATE TRANSCRIPT] Failed to persist realtime psychometric profile:',
+        persistError
+      );
+    }
+  } catch (error) {
+    console.error(
+      '❌ [UPDATE TRANSCRIPT] Error requesting realtime psychometric profile:',
+      error
+    );
+  }
 }
 
 async function updateSessionSummary({
@@ -178,39 +403,36 @@ export async function POST(request: NextRequest) {
       asTranscriptEntries(transcript)
     );
 
-    let combinedTranscript = priorTranscript.slice();
-    let newEntries = incomingNormalized;
-
-    if (incomingNormalized.length > 0) {
-      if (incomingNormalized.length >= priorTranscript.length) {
-        // Treat payload as the full transcript and compute delta
-        newEntries = incomingNormalized.slice(priorTranscript.length);
-        combinedTranscript = incomingNormalized;
-      } else {
-        // Treat payload as incremental entries
-        newEntries = incomingNormalized;
-        combinedTranscript = priorTranscript.concat(incomingNormalized);
+    const existingHashes = new Set<string>();
+    for (const entry of priorTranscript) {
+      const hash = makeEntryHash(entry);
+      if (hash) {
+        existingHashes.add(hash);
       }
-    } else {
-      newEntries = [];
-      combinedTranscript = priorTranscript;
     }
 
+    const dedupedNewEntries = incomingNormalized.filter((entry) => {
+      const hash = makeEntryHash(entry);
+      if (!hash) {
+        return true;
+      }
+      if (existingHashes.has(hash)) {
+        return false;
+      }
+      existingHashes.add(hash);
+      return true;
+    });
+
     // Ensure every new entry has a timestamp
-    const timestampedNewEntries = newEntries.map((entry, index) => ({
+    const timestampedNewEntries = dedupedNewEntries.map((entry, index) => ({
       ...entry,
       timestamp: entry.timestamp || new Date(Date.now() + index).toISOString()
     }));
 
-    if (timestampedNewEntries.length > 0) {
-      if (incomingNormalized.length >= priorTranscript.length) {
-        combinedTranscript = combinedTranscript
-          .slice(0, combinedTranscript.length - timestampedNewEntries.length)
-          .concat(timestampedNewEntries);
-      } else {
-        combinedTranscript = priorTranscript.concat(timestampedNewEntries);
-      }
-    }
+    const combinedTranscript =
+      timestampedNewEntries.length > 0
+        ? priorTranscript.concat(timestampedNewEntries)
+        : priorTranscript.slice();
 
     const normalizedEmail =
       typeof participantEmail === 'string' && participantEmail.trim().includes('@')
@@ -331,6 +553,13 @@ export async function POST(request: NextRequest) {
             updatedSession,
             newEntries: timestampedNewEntries,
             previousSummary
+          });
+          scheduleRealtimePsychometrics({
+            sessionId,
+            updatedSession,
+            fullTranscript: combinedTranscript,
+            weaviateSessionId,
+            newEntries: timestampedNewEntries
           });
         } catch (chunkError) {
           console.error('❌ [UPDATE TRANSCRIPT] Failed to store new chunks:', chunkError);
